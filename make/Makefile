@@ -25,7 +25,8 @@
 #     - `GRAPHIC`: Enable display devices and graphic output (virtio-gpu)
 #     - `BUS`: Device bus type: mmio, pci
 #     - `MEM`: Memory size (default is 128M)
-#     - `DISK_IMG`: Path to the virtual disk image
+#     - `DISK_IMG`: Path to the root filesystem image (mounted at /)
+#     - `TEST_IMG`: Path to the test/evaluation disk image (mounted at /oscomp)
 #     - `ACCEL`: Enable hardware acceleration (KVM on linux)
 #     - `QEMU_LOG`: Enable QEMU logging (log file is "qemu.log")
 #     - `NET_DUMP`: Enable network packet dump (log file is "netdump.pcap")
@@ -71,6 +72,7 @@ ICOUNT ?= n
 QEMU_ARGS ?=
 
 DISK_IMG ?= disk.img
+TEST_IMG ?= test.img
 QEMU_LOG ?= n
 NET_DUMP ?= n
 NET_DEV ?= user

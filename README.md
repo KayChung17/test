@@ -100,11 +100,14 @@ cd StarryOS
 cargo -V
 ```
 
-### 3. Prepare rootfs
+### 3. Prepare rootfs 准备磁盘镜像
 
+#### 单盘模式（标准开发）
+
+下载 Starry-OS 官方根文件系统作为启动盘：
 ```bash
 # Default target: riscv64
-make rootfs
+make rootfs # 下载到 make/disk.img，启动后挂载为 /
 # Explicit target
 make ARCH=riscv64 rootfs
 make ARCH=loongarch64 rootfs
@@ -112,15 +115,37 @@ make ARCH=loongarch64 rootfs
 
 This will download rootfs image from [Starry-OS/rootfs](https://github.com/Starry-OS/rootfs/releases) and set up the disk file for running on QEMU.
 
-### 4. Build and run on QEMU
+#### 双盘模式（比赛评测）
+启动后自动识别双盘：最后一块作为根 /，其余保留挂载到 /oscomp。
+
+1. 下载评测盘放置为 `make/test.img`（或任意路径，通过 `TEST_IMG` 指定）：
+
+   ```bash
+   wget https://github.com/LearningOS/rust-based-os-comp2025/releases/download/alpine-linux-riscv64-ext4fs/alpine-linux-riscv64-ext4fs.img.xz
+   xz -d alpine-linux-riscv64-ext4fs.img.xz
+   cp alpine-linux-riscv64-ext4fs.img make/test.img
+   ```
+
+2. 从评测盘提取文件生成辅助根文件系统镜像：
+
+   ```bash
+   make aux            # 生成 make/disk.img（128MB）
+   # 或指定评测盘路径
+   make aux TEST_IMG=path/to/eval.img
+   ```
+
+   启动后 `make/disk.img` 挂载为 /，评测盘挂载到 /oscomp。
+
+### 4. Build and run on QEMU 构建并运行
 
 ```bash
 # Default target: riscv64
 make build
-# Explicit target
+# Explicit target（可选）
 make ARCH=riscv64 build
 make ARCH=loongarch64 build
 
+make run LOG=info # QEMU 启动（双盘时建议 LOG=info 查看设备枚举日志）
 # Run on QEMU (also rebuilds if necessary)
 make ARCH=riscv64 run
 make ARCH=loongarch64 run
