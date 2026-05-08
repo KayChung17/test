@@ -90,6 +90,12 @@ pub fn sys_mkdirat(dirfd: i32, path: *const c_char, mode: u32) -> AxResult<isize
     let path = vm_load_string(path)?;
     debug!("sys_mkdirat <= dirfd: {dirfd}, path: {path}, mode: {mode}");
 
+    // A path without a filename component (e.g. "/") refers to an existing
+    // directory; return EEXIST as Linux does, so that `mkdir -p` works.
+    if axfs_ng_vfs::path::Path::new(&path).file_name().is_none() {
+        return Err(AxError::AlreadyExists);
+    }
+
     let mode = mode & !current().as_thread().proc_data.umask();
     let mode = NodePermission::from_bits_truncate(mode as u16);
 
