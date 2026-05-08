@@ -50,6 +50,7 @@ repository.workspace = true
 
 [features]
 default = []
+competition = []
 qemu = [
     "axfeat/defplat",
     "axfeat/bus-pci",

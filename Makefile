@@ -15,10 +15,15 @@ export ICOUNT := n
 export A := $(PWD)
 export NO_AXSTD := y
 export AX_LIB := axfeat
+export COMPETITION ?= n
 export APP_FEATURES := qemu
 
 ifeq ($(MEMTRACK), y)
 	APP_FEATURES += starry-api/memtrack
+endif
+
+ifeq ($(COMPETITION), y)
+	APP_FEATURES += competition
 endif
 
 default: build
