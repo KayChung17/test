@@ -15,16 +15,22 @@ export ICOUNT := n
 export A := $(PWD)
 export NO_AXSTD := y
 export AX_LIB := axfeat
+export COMPETITION ?= n
 export APP_FEATURES := qemu
 
 ifeq ($(MEMTRACK), y)
 	APP_FEATURES += starry-api/memtrack
 endif
 
+ifeq ($(COMPETITION), y)
+	APP_FEATURES += competition
+endif
+
 default: build
 
 ROOTFS_URL = https://github.com/Starry-OS/rootfs/releases/download/20260214
 ROOTFS_IMG = rootfs-$(ARCH).img
+TEST_IMG ?= test.img
 
 rootfs:
 	@if [ ! -f $(ROOTFS_IMG) ]; then \
@@ -33,6 +39,11 @@ rootfs:
 		xz -d $(ROOTFS_IMG).xz; \
 	fi
 	@cp $(ROOTFS_IMG) make/disk.img
+	@echo "Rootfs ready: make/disk.img"
+
+aux: $(TEST_IMG) scripts/gen-aux-img.sh
+	@scripts/gen-aux-img.sh $(TEST_IMG) make/disk.img 128
+	@echo "Auxiliary rootfs ready: make/disk.img"
 
 img:
 	@echo -e "\033[33mWARN: The 'img' target is deprecated. Please use 'rootfs' instead.\033[0m"
@@ -42,7 +53,9 @@ defconfig justrun clean:
 	@$(MAKE) -C make $@
 
 build run debug disasm: defconfig
-	@$(MAKE) -C make $@
+	@$(MAKE) -C make $@ \
+		$(if $(TEST_IMG),TEST_IMG=$(abspath $(TEST_IMG))) \
+		DISK_IMG=$(abspath make/disk.img)
 
 ci-test:
 	./scripts/ci-test.py $(ARCH)
@@ -57,4 +70,4 @@ la:
 vf2:
 	$(MAKE) ARCH=riscv64 APP_FEATURES=vf2 MYPLAT=axplat-riscv64-visionfive2 BUS=mmio build
 
-.PHONY: build run justrun debug disasm clean
+.PHONY: build run justrun debug disasm clean rootfs aux

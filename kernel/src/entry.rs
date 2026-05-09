@@ -4,6 +4,7 @@ use alloc::{
 };
 
 use axfs::FS_CONTEXT;
+use axfs_ng_vfs::NodePermission;
 use axhal::uspace::UserContext;
 use axsync::Mutex;
 use axtask::{AxTaskExt, spawn_task};
@@ -19,6 +20,25 @@ use crate::{
 /// Initialize and run initproc.
 pub fn init(args: &[String], envs: &[String]) {
     pseudofs::mount_all().expect("Failed to mount pseudofs");
+
+    // Mount extra block devices (e.g. competition test disk at /oscomp)
+    for dev in axfs::take_extra_block_devs() {
+        let fs = axfs::fs::new_default(dev).expect("Failed to init extra filesystem");
+        let fs_name = fs.name();
+        let ctx = axfs::FS_CONTEXT.lock();
+        let path = "/oscomp";
+        if ctx.resolve(path).is_err() {
+            ctx.create_dir(path, NodePermission::from_bits_truncate(0o755))
+                .expect("Failed to create /oscomp");
+        }
+        ctx.resolve(path)
+            .expect("Failed to resolve /oscomp")
+            .mount(&fs)
+            .expect("Failed to mount extra fs at /oscomp");
+        drop(ctx);
+        info!("Mounted extra device at {} (filesystem: {})", path, fs_name);
+    }
+
     spawn_alarm_task();
 
     let loc = FS_CONTEXT

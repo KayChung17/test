@@ -6,7 +6,11 @@ extern crate alloc;
 
 use alloc::{borrow::ToOwned, vec::Vec};
 
+#[cfg(not(feature = "competition"))]
 pub const CMDLINE: &[&str] = &["/bin/sh", "-c", include_str!("init.sh")];
+
+#[cfg(feature = "competition")]
+pub const CMDLINE: &[&str] = &["/bin/sh", "-c", include_str!("init_competition.sh")];
 
 #[unsafe(no_mangle)]
 fn main() {

@@ -44,9 +44,23 @@ qemu_args-loongarch64 := \
 
 qemu_args-y := -m $(MEM) -smp $(SMP) $(qemu_args-$(ARCH))
 
+# Resolve to absolute paths (sub-make runs in make/ directory)
+TEST_IMG_ABS := $(if $(TEST_IMG),$(abspath $(TEST_IMG)))
+DISK_IMG_ABS := $(abspath $(DISK_IMG))
+
+# Test disk (first device, optional). When present it becomes the extra device
+# mounted at /oscomp. Maps to x0 in the competition QEMU spec.
+ifneq ($(wildcard $(TEST_IMG_ABS)),)
 qemu_args-$(BLK) += \
-  -device virtio-blk-$(vdev-suffix),drive=disk0 \
-  -drive id=disk0,if=none,format=raw,file=$(DISK_IMG)
+  -device virtio-blk-$(vdev-suffix),drive=x0 \
+  -drive id=x0,if=none,format=raw,file=$(TEST_IMG_ABS)
+endif
+
+# Root filesystem disk (last device → selected as / by init_filesystems).
+# Maps to x1 / disk.img in the competition QEMU spec.
+qemu_args-$(BLK) += \
+  -device virtio-blk-$(vdev-suffix),drive=x1 \
+  -drive id=x1,if=none,format=raw,file=$(DISK_IMG_ABS)
 
 qemu_args-$(NET) += \
   -device virtio-net-$(vdev-suffix),netdev=net0
