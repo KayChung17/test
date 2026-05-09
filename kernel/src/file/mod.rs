@@ -17,7 +17,7 @@ use axpoll::Pollable;
 use axtask::current;
 use downcast_rs::{DowncastSync, impl_downcast};
 use flatten_objects::FlattenObjects;
-use linux_raw_sys::general::{RLIMIT_NOFILE, stat, statx, statx_timestamp};
+use linux_raw_sys::general::{O_RDONLY, O_WRONLY, RLIMIT_NOFILE, stat, statx, statx_timestamp};
 use spin::RwLock;
 
 pub use self::{
@@ -223,14 +223,15 @@ pub fn close_file_like(fd: c_int) -> AxResult {
 pub fn add_stdio(fd_table: &mut FlattenObjects<FileDescriptor, AX_FILE_LIMIT>) -> AxResult<()> {
     assert_eq!(fd_table.count(), 0);
     let cx = FS_CONTEXT.lock();
-    let open = |options: &mut OpenOptions| {
+    let open = |options: &mut OpenOptions, flags| {
         AxResult::Ok(Arc::new(File::new(
             options.open(&cx, "/dev/console")?.into_file()?,
+            flags,
         )))
     };
 
-    let tty_in = open(OpenOptions::new().read(true).write(false))?;
-    let tty_out = open(OpenOptions::new().read(false).write(true))?;
+    let tty_in = open(OpenOptions::new().read(true).write(false), O_RDONLY as u32)?;
+    let tty_out = open(OpenOptions::new().read(false).write(true), O_WRONLY as u32)?;
     fd_table
         .add(FileDescriptor {
             inner: tty_in,

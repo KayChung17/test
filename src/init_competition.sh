@@ -16,6 +16,22 @@ if [ ! -d "$BENCH_DIR" ] || [ "$MODE" = "debug" ]; then
     exec sh --login
 fi
 
+# TEMP: LTP fs regression
+echo "[LTP-FS-BEGIN] mkdir fchdir fcntl fchmod fchmodat"
+for t in mkdir fchdir fcntl fchmod fchmodat; do
+    bin="/oscomp/bench/basic/ltp_fs/$t"
+    if [ -x "$bin" ]; then
+        echo "[LTP-CASE] $t"
+        "$bin"
+        rc=$?
+        echo "[LTP-END] $t rc=$rc"
+    else
+        echo "[LTP-SKIP] $t (missing)"
+    fi
+done
+echo "[LTP-FS-DONE]"
+# TEMP: power off after LTP tests for CI
+echo "=== LTP tests done, powering off ==="
 echo "[SUITE-BEGIN] basic"
 
 PASS=0
