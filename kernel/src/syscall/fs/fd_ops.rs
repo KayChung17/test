@@ -14,9 +14,10 @@ use linux_raw_sys::general::*;
 
 use crate::{
     file::{
-        Directory, FD_TABLE, File, FileLike, Pipe, add_file_like, close_file_like, get_file_like,
-        with_fs,
+        Directory, FD_TABLE, File, FileDescriptor, FileLike, Pipe, add_file_like, close_file_like,
+        get_file_like, with_fs,
     },
+    task::AX_FILE_LIMIT,
     mm::{UserPtr, vm_load_string},
     pseudofs::{Device, dev::tty},
     syscall::sys::{sys_getegid, sys_geteuid},
@@ -98,7 +99,7 @@ fn add_to_fd(result: OpenResult, flags: u32) -> AxResult<i32> {
                     file = axfs::File::new(FileBackend::Direct(loc), file.flags());
                 }
             }
-            Arc::new(File::new(file))
+            Arc::new(File::new(file, flags))
         }
         OpenResult::Dir(dir) => Arc::new(Directory::new(dir)),
     };
@@ -192,6 +193,27 @@ fn dup_fd(old_fd: c_int, cloexec: bool) -> AxResult<isize> {
     Ok(new_fd as _)
 }
 
+fn dup_fd_at(old_fd: c_int, min_fd: i32, cloexec: bool) -> AxResult<isize> {
+    let f = get_file_like(old_fd)?;
+    let max_nofile = current().as_thread().proc_data.rlim.read()[RLIMIT_NOFILE].current;
+    let mut table = FD_TABLE.write();
+    if table.count() as u64 >= max_nofile {
+        return Err(AxError::TooManyOpenFiles);
+    }
+    let mut fd = min_fd as usize;
+    let limit = (max_nofile as usize).min(AX_FILE_LIMIT);
+    while fd < limit {
+        match table.add_at(fd, FileDescriptor {
+            inner: f.clone(),
+            cloexec,
+        }) {
+            Ok(id) => return Ok(id as _),
+            Err(_) => fd += 1,
+        }
+    }
+    Err(AxError::TooManyOpenFiles)
+}
+
 pub fn sys_dup(old_fd: c_int) -> AxResult<isize> {
     debug!("sys_dup <= {old_fd}");
     dup_fd(old_fd, false)
@@ -240,8 +262,8 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
     debug!("sys_fcntl <= fd: {fd} cmd: {cmd} arg: {arg}");
 
     match cmd as u32 {
-        F_DUPFD => dup_fd(fd, false),
-        F_DUPFD_CLOEXEC => dup_fd(fd, true),
+        F_DUPFD => dup_fd_at(fd, arg as i32, false),
+        F_DUPFD_CLOEXEC => dup_fd_at(fd, arg as i32, true),
         F_SETLK | F_SETLKW => Ok(0),
         F_OFD_SETLK | F_OFD_SETLKW => Ok(0),
         F_GETLK | F_OFD_GETLK => {
@@ -260,13 +282,27 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
             if f.nonblocking() {
                 ret |= O_NONBLOCK;
             }
-
-            let perm = NodePermission::from_bits_truncate(f.stat()?.mode as _);
-            if perm.contains(NodePermission::OWNER_WRITE) {
-                if perm.contains(NodePermission::OWNER_READ) {
-                    ret |= O_RDWR;
-                } else {
-                    ret |= O_WRONLY;
+            if let Some(file) = f.downcast_ref::<File>() {
+                let open_flags = file.flags();
+                let acc = open_flags & (O_RDONLY | O_WRONLY | O_RDWR) as u32;
+                if acc != 0 {
+                    ret |= acc;
+                }
+                if open_flags & O_APPEND as u32 != 0 {
+                    ret |= O_APPEND;
+                }
+                if open_flags & O_DIRECT as u32 != 0 {
+                    ret |= O_DIRECT;
+                }
+            } else {
+                // Fallback for non-File file likes
+                let perm = NodePermission::from_bits_truncate(f.stat()?.mode as _);
+                if perm.contains(NodePermission::OWNER_WRITE) {
+                    if perm.contains(NodePermission::OWNER_READ) {
+                        ret |= O_RDWR;
+                    } else {
+                        ret |= O_WRONLY;
+                    }
                 }
             }
 

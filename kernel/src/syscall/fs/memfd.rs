@@ -3,7 +3,7 @@ use core::ffi::c_char;
 
 use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, OpenOptions};
-use linux_raw_sys::general::MFD_CLOEXEC;
+use linux_raw_sys::general::{MFD_CLOEXEC, O_RDWR};
 
 use crate::{
     file::{File, FileLike},
@@ -25,7 +25,7 @@ pub fn sys_memfd_create(_name: UserConstPtr<c_char>, flags: u32) -> AxResult<isi
                 .open(&fs, &name)?
                 .into_file()?;
             let cloexec = flags & MFD_CLOEXEC != 0;
-            return File::new(file).add_to_fd_table(cloexec).map(|fd| fd as _);
+            return File::new(file, O_RDWR as u32).add_to_fd_table(cloexec).map(|fd| fd as _);
         }
     }
     Err(AxError::TooManyOpenFiles)

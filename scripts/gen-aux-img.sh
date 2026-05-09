@@ -66,6 +66,7 @@ ln busybox echo
 ln busybox cat
 ln busybox ls
 ln busybox mount
+ln busybox umount
 ln busybox mkdir
 ln busybox grep
 ln busybox sed

@@ -56,13 +56,16 @@ pub fn resolve_at(dirfd: c_int, path: Option<&str>, flags: u32) -> AxResult<Reso
             }
             let file_like = get_file_like(dirfd)?;
             let f = file_like.clone();
-            Ok(if let Some(file) = f.downcast_ref::<File>() {
-                ResolveAtResult::File(file.inner().backend()?.location().clone())
+            if let Some(file) = f.downcast_ref::<File>() {
+                match file.inner().backend() {
+                    Ok(backend) => Ok(ResolveAtResult::File(backend.location().clone())),
+                    Err(e) => Err(e),
+                }
             } else if let Some(dir) = f.downcast_ref::<Directory>() {
-                ResolveAtResult::File(dir.inner().clone())
+                Ok(ResolveAtResult::File(dir.inner().clone()))
             } else {
-                ResolveAtResult::Other(file_like)
-            })
+                Ok(ResolveAtResult::Other(file_like))
+            }
         }
         Some(path) => with_fs(dirfd, |fs| {
             if flags & AT_SYMLINK_NOFOLLOW != 0 {
@@ -100,18 +103,24 @@ pub fn metadata_to_kstat(metadata: &Metadata) -> Kstat {
 pub struct File {
     inner: axfs::File,
     nonblock: AtomicBool,
+    flags: u32,
 }
 
 impl File {
-    pub fn new(inner: axfs::File) -> Self {
+    pub fn new(inner: axfs::File, flags: u32) -> Self {
         Self {
             inner,
             nonblock: AtomicBool::new(false),
+            flags,
         }
     }
 
     pub fn inner(&self) -> &axfs::File {
         &self.inner
+    }
+
+    pub fn flags(&self) -> u32 {
+        self.flags
     }
 
     fn is_blocking(&self) -> bool {
