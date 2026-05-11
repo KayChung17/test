@@ -68,6 +68,10 @@ pub fn resolve_at(dirfd: c_int, path: Option<&str>, flags: u32) -> AxResult<Reso
             }
         }
         Some(path) => {
+            const PATH_MAX: usize = 4096;
+            if path.len() > PATH_MAX {
+                return Err(AxError::NameTooLong);
+            }
             if path.starts_with('/') {
                 // Absolute path: ignore dirfd, resolve from global root.
                 let fs = FS_CONTEXT.lock();
