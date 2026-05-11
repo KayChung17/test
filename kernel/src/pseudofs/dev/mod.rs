@@ -242,6 +242,22 @@ fn builder(fs: Arc<SimpleFs>) -> DirMaker {
         "pts",
         SimpleDir::new_maker(fs.clone(), Arc::new(tty::PtsDir)),
     );
+    root.add(
+        "fd",
+        crate::pseudofs::SimpleFile::new(fs.clone(), NodeType::Symlink, || Ok("/proc/self/fd")),
+    );
+    root.add(
+        "stdin",
+        crate::pseudofs::SimpleFile::new(fs.clone(), NodeType::Symlink, || Ok("/proc/self/fd/0")),
+    );
+    root.add(
+        "stdout",
+        crate::pseudofs::SimpleFile::new(fs.clone(), NodeType::Symlink, || Ok("/proc/self/fd/1")),
+    );
+    root.add(
+        "stderr",
+        crate::pseudofs::SimpleFile::new(fs.clone(), NodeType::Symlink, || Ok("/proc/self/fd/2")),
+    );
     #[cfg(feature = "dev-log")]
     root.add(
         "log",

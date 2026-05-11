@@ -361,7 +361,43 @@ fn builder(fs: Arc<SimpleFs>) -> DirMaker {
     root.add(
         "mounts",
         SimpleFile::new_regular(fs.clone(), || {
-            Ok("proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n")
+            Ok(indoc! {"
+                devfs /dev devfs rw,nosuid,relatime 0 0
+                tmpfs /dev/shm tmpfs rw,nosuid,nodev,relatime 0 0
+                tmpfs /tmp tmpfs rw,nosuid,nodev,relatime 0 0
+                proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+                tmpfs /sys tmpfs rw,nosuid,nodev,relatime 0 0
+            "})
+        }),
+    );
+    root.add(
+        "filesystems",
+        SimpleFile::new_regular(fs.clone(), || {
+            Ok(indoc! {"
+                nodev	proc
+                nodev	devfs
+                nodev	tmpfs
+            "})
+        }),
+    );
+    root.add(
+        "uptime",
+        SimpleFile::new_regular(fs.clone(), || Ok("0.00 0.00\n")),
+    );
+    root.add(
+        "stat",
+        SimpleFile::new_regular(fs.clone(), || {
+            Ok(indoc! {"
+                cpu  0 0 0 0 0 0 0 0 0 0
+                cpu0 0 0 0 0 0 0 0 0 0 0
+                intr 0
+                ctxt 0
+                btime 0
+                processes 1
+                procs_running 1
+                procs_blocked 0
+                softirq 0 0 0 0 0 0 0 0 0 0 0
+            "})
         }),
     );
     root.add(
