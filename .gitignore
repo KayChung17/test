@@ -14,4 +14,7 @@
 *.swp
 *.swo
 .claude/
-
+sdcard/
+mnt/
+*.zip
+tmp/

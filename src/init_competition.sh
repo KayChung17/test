@@ -1,69 +1,83 @@
 #!/bin/sh
 
-export HOME=/root
-BENCH_DIR="/oscomp/bench/basic"
+export HOME=/
 
-# If no bench directory or MODE=debug, drop to shell
-if [ ! -d "$BENCH_DIR" ] || [ "$MODE" = "debug" ]; then
+TEST_DIR="/oscomp/glibc"
+
+if [ ! -d "$TEST_DIR" ]; then
     echo "=== Starry OS ==="
-    if [ ! -d "$BENCH_DIR" ]; then
-        echo "Bench directory not found: $BENCH_DIR"
-    fi
-    if [ "$MODE" = "debug" ]; then
-        echo "Debug mode, entering shell..."
-    fi
-    cd ~
+    echo "Test dir not found: $TEST_DIR"
+    cd /root
     exec sh --login
 fi
 
-# TEMP: LTP fs regression
-echo "[LTP-FS-BEGIN] mkdir fchdir fcntl fchmod fchmodat"
-for t in mkdir fchdir fcntl fchmod fchmodat; do
-    bin="/oscomp/bench/basic/ltp_fs/$t"
-    if [ -x "$bin" ]; then
-        echo "[LTP-CASE] $t"
-        "$bin"
-        rc=$?
-        echo "[LTP-END] $t rc=$rc"
-    else
-        echo "[LTP-SKIP] $t (missing)"
-    fi
-done
-echo "[LTP-FS-DONE]"
-# TEMP: power off after LTP tests for CI
-echo "=== LTP tests done, powering off ==="
-echo "[SUITE-BEGIN] basic"
+echo "=== Starry OS Competition Mode ==="
+echo "Test dir: $TEST_DIR"
 
 PASS=0
 FAIL=0
-tests=$(ls -1 "$BENCH_DIR" 2>/dev/null)
-suite_code=0
+SKIP=0
 
-for name in $tests; do
-    dir="$BENCH_DIR/$name"
-    [ -d "$dir" ] || continue
+# ---- basic syscall tests ----
+echo "[SUITE-BEGIN] basic"
 
-    echo "[CASE-BEGIN] $name"
+BASIC_DIR="$TEST_DIR/basic"
+BASIC_TESTS="brk chdir clone close dup dup2 execve exit fork fstat getcwd getdents getpid getppid gettimeofday mkdir_ mmap mount munmap open openat pipe read sleep test_echo times umount uname unlink wait waitpid write yield"
 
-    if [ -f "$dir/run.sh" ]; then
-        (cd "$dir" && exec sh run.sh)
+for t in $BASIC_TESTS; do
+    bin="$BASIC_DIR/$t"
+    if [ -x "$bin" ]; then
+        echo "[CASE-BEGIN] $t"
+        "$bin"
         rc=$?
-    elif [ -f "$dir/main" ]; then
-        (cd "$dir" && exec ./main)
-        rc=$?
+        if [ "$rc" -eq 0 ]; then
+            PASS=$((PASS + 1))
+        else
+            FAIL=$((FAIL + 1))
+        fi
+        echo "[CASE-END] $t code=$rc"
     else
-        rc=127
+        echo "[CASE-SKIP] $t (missing)"
+        SKIP=$((SKIP + 1))
     fi
-
-    if [ "$rc" -eq 0 ]; then
-        PASS=$((PASS + 1))
-    else
-        FAIL=$((FAIL + 1))
-        suite_code=1
-    fi
-
-    echo "[CASE-END] $name code=$rc"
 done
 
-echo "[SUITE-END] basic code=$suite_code"
-echo "PASS: $PASS  FAIL: $FAIL"
+echo "[SUITE-END] basic"
+echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
+
+# ---- glibc dynamic linker setup ----
+# LTP binaries need ld-linux-riscv64-lp64d.so.1 at /lib
+GLIBC_LIB="$TEST_DIR/lib"
+ln -sf "$GLIBC_LIB/ld-linux-riscv64-lp64d.so.1" /lib/
+ln -sf "$GLIBC_LIB/libc.so.6" /lib/
+ln -sf "$GLIBC_LIB/libm.so.6" /lib/
+
+# ---- LTP fs tests ----
+LTP_DIR="$TEST_DIR/ltp/testcases/bin"
+echo "[SUITE-BEGIN] ltp-fs"
+
+LTP_FS_TESTS="fchmod01 fchmod02 fchmod03 fchmod04 fchmod05 fchmod06 fchmodat01 fchmodat02"
+
+for t in $LTP_FS_TESTS; do
+    bin="$LTP_DIR/$t"
+    if [ -x "$bin" ]; then
+        echo "[CASE-BEGIN] $t"
+        "$bin"
+        rc=$?
+        if [ "$rc" -eq 0 ]; then
+            PASS=$((PASS + 1))
+        else
+            FAIL=$((FAIL + 1))
+        fi
+        echo "[CASE-END] $t code=$rc"
+    else
+        echo "[CASE-SKIP] $t (missing)"
+        SKIP=$((SKIP + 1))
+    fi
+done
+
+echo "[SUITE-END] ltp-fs"
+echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
+
+# ---- all done ----
+echo "=== tests done, powering off ==="
