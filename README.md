@@ -102,7 +102,7 @@ cargo -V
 
 ### 3. Prepare rootfs 准备磁盘镜像
 
-#### 单盘模式（标准开发）
+#### 单盘模式
 
 下载 Starry-OS 官方根文件系统作为启动盘：
 ```bash
@@ -115,23 +115,28 @@ make ARCH=loongarch64 rootfs
 
 This will download rootfs image from [Starry-OS/rootfs](https://github.com/Starry-OS/rootfs/releases) and set up the disk file for running on QEMU.
 
-#### 双盘模式（比赛评测）
+#### 双盘模式
 启动后自动识别双盘：最后一块作为根 /，其余保留挂载到 /oscomp。
 
-1. 下载评测盘放置为 `make/test.img`（或任意路径，通过 `TEST_IMG` 指定）：
+`COMPETITION=y` 模式下，系统默认执行 `src/init_competition.sh`，用于自动挂载评测盘、运行比赛入口并输出统一日志；如需快速定向回归，也可改用 `src/init_competition_focus.sh` 只跑指定测试集。
+
+1. 评测盘
+默认放置为 `make/test.img`（或任意路径，通过 `TEST_IMG` 指定）
+
+- 下载非完整版比赛测评盘
 
    ```bash
    wget https://github.com/LearningOS/rust-based-os-comp2025/releases/download/alpine-linux-riscv64-ext4fs/alpine-linux-riscv64-ext4fs.img.xz
-   xz -d alpine-linux-riscv64-ext4fs.img.xz
-   cp alpine-linux-riscv64-ext4fs.img make/test.img
    ```
+
+- 完整测评盘基于比赛要求，在docker中用提供的镜像编译
 
 2. 从评测盘提取文件生成辅助根文件系统镜像：
 
    ```bash
    make aux            # 生成 make/disk.img（128MB）
    # 或指定评测盘路径
-   make aux TEST_IMG=path/to/eval.img
+   make aux TEST_IMG=path/to/disk.img
    ```
 
    启动后 `make/disk.img` 挂载为 /，评测盘挂载到 /oscomp。
@@ -144,12 +149,22 @@ make build
 # Explicit target（可选）
 make ARCH=riscv64 build
 make ARCH=loongarch64 build
-
-make run LOG=info # QEMU 启动（双盘时建议 LOG=info 查看设备枚举日志）
+```
+#### 普通运行
+```bash
+make run LOG=info # QEMU 启动（查看日志）
 # Run on QEMU (also rebuilds if necessary)
 make ARCH=riscv64 run
 make ARCH=loongarch64 run
 ```
+
+#### 测试运行
+```
+# Competition mode
+make COMPETITION=y run TEST_IMG=make/test.img
+```
+
+使用 `src/init_competition.sh` 作为默认入口脚本，启动后将辅助根文件系统挂载到 `/`，并将评测盘挂载到 `/oscomp`。
 
 Note:
 
