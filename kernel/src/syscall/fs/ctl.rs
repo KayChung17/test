@@ -5,7 +5,7 @@ use core::{
     time::Duration,
 };
 
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axfs::{FS_CONTEXT, FsContext};
 use axfs_ng_vfs::{MetadataUpdate, NodePermission, NodeType, path::Path};
 use axhal::time::wall_time;
@@ -63,7 +63,22 @@ pub fn sys_chdir(path: *const c_char) -> AxResult<isize> {
 pub fn sys_fchdir(dirfd: i32) -> AxResult<isize> {
     debug!("sys_fchdir <= dirfd: {dirfd}");
 
-    let entry = with_fs(dirfd, |fs| Ok(fs.current_dir().clone()))?;
+    let entry = Directory::from_fd(dirfd)?.inner().clone();
+    let meta = entry.metadata()?;
+    let curr = current();
+    let uid = curr.as_thread().proc_data.uid();
+    let gid = curr.as_thread().proc_data.gid();
+    let allowed = if uid == meta.uid {
+        meta.mode.contains(NodePermission::OWNER_EXEC)
+    } else if gid == meta.gid {
+        meta.mode.contains(NodePermission::GROUP_EXEC)
+    } else {
+        meta.mode.contains(NodePermission::OTHER_EXEC)
+    };
+    if !allowed {
+        return Err(AxError::from(LinuxError::EACCES));
+    }
+
     FS_CONTEXT.lock().set_current_dir(entry)?;
     Ok(0)
 }
@@ -100,7 +115,26 @@ pub fn sys_mkdirat(dirfd: i32, path: *const c_char, mode: u32) -> AxResult<isize
     let mode = NodePermission::from_bits_truncate(mode as u16);
 
     with_fs(dirfd, |fs| {
-        fs.create_dir(path, mode)?;
+        let (parent, name) = fs.resolve_parent(Path::new(&path))?;
+        let meta = parent.metadata()?;
+        let curr = current();
+        let uid = curr.as_thread().proc_data.uid();
+        let gid = curr.as_thread().proc_data.gid();
+        let allowed = if uid == meta.uid {
+            meta.mode.contains(NodePermission::OWNER_WRITE | NodePermission::OWNER_EXEC)
+        } else if gid == meta.gid {
+            meta.mode.contains(NodePermission::GROUP_WRITE | NodePermission::GROUP_EXEC)
+        } else {
+            meta.mode.contains(NodePermission::OTHER_WRITE | NodePermission::OTHER_EXEC)
+        };
+        if !allowed {
+            return Err(AxError::from(LinuxError::EACCES));
+        }
+        let entry = parent.create(&name, NodeType::Directory, mode)?;
+        entry.update_metadata(MetadataUpdate {
+            owner: Some((uid, gid)),
+            ..Default::default()
+        })?;
         Ok(0)
     })
 }
@@ -376,18 +410,22 @@ pub fn sys_fchmod(fd: i32, mode: u32) -> AxResult<isize> {
 
 pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> AxResult<isize> {
     let path = path.nullable().map(vm_load_string).transpose()?;
-    // Treat empty string the same as NULL when AT_EMPTY_PATH is set,
-    // since some libc wrappers pass "" instead of NULL.
     let path = if path.as_deref() == Some("") { None } else { path };
-    let loc = resolve_at(dirfd, path.as_deref(), flags)
-        .inspect_err(|e| warn!("sys_fchmodat: resolve_at failed: {:?}", e))?;
-    let loc = loc.into_file()
-        .ok_or_else(|| { warn!("sys_fchmodat: into_file returned None"); AxError::BadFileDescriptor })?;
+    let loc = resolve_at(dirfd, path.as_deref(), flags)?.into_file().ok_or(AxError::BadFileDescriptor)?;
+    let meta = loc.metadata()?;
+
+    let curr = current();
+    let uid = curr.as_thread().proc_data.uid();
+    let gid = curr.as_thread().proc_data.gid();
+    let mut mode = NodePermission::from_bits_truncate(mode as u16);
+    if uid != 0 && gid != meta.gid {
+        mode.remove(NodePermission::SET_GID);
+    }
+
     loc.update_metadata(MetadataUpdate {
-        mode: Some(NodePermission::from_bits_truncate(mode as u16)),
+        mode: Some(mode),
         ..Default::default()
-    })
-    .inspect_err(|e| warn!("sys_fchmodat: update_metadata failed: {:?}", e))?;
+    })?;
     Ok(0)
 }
 

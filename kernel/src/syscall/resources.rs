@@ -1,7 +1,7 @@
 use axerrno::{AxError, AxResult};
 use axhal::time::TimeValue;
 use axtask::current;
-use linux_raw_sys::general::{__kernel_old_timeval, RLIM_NLIMITS, rlimit64, rusage};
+use linux_raw_sys::general::{__kernel_old_timeval, RLIM_NLIMITS, rlimit, rlimit64, rusage};
 use starry_process::Pid;
 use starry_vm::{VmMutPtr, VmPtr};
 
@@ -9,6 +9,20 @@ use crate::{
     task::{AsThread, Thread, get_process_data, get_task},
     time::TimeValueLike,
 };
+
+pub fn sys_getrlimit(resource: u32, old_limit: *mut rlimit) -> AxResult<isize> {
+    if resource >= RLIM_NLIMITS {
+        return Err(AxError::InvalidInput);
+    }
+
+    let curr = current();
+    let limit = &curr.as_thread().proc_data.rlim.read()[resource];
+    old_limit.vm_write(rlimit {
+        rlim_cur: limit.current as _,
+        rlim_max: limit.max as _,
+    })?;
+    Ok(0)
+}
 
 pub fn sys_prlimit64(
     pid: Pid,

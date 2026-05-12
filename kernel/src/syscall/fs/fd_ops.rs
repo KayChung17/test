@@ -1,11 +1,11 @@
-use alloc::{format, string::ToString, sync::Arc};
+use alloc::{collections::BTreeMap, format, string::ToString, sync::Arc, vec::Vec};
 use core::{
     ffi::{c_char, c_int},
     mem,
     ops::{Deref, DerefMut},
 };
 
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axfs::{FS_CONTEXT, FileBackend, OpenOptions, OpenResult};
 use axfs_ng_vfs::{DirEntry, FileNode, Location, NodePermission, NodeType, Reference};
 use axtask::current;
@@ -18,7 +18,7 @@ use crate::{
         get_file_like, with_fs,
     },
     task::AX_FILE_LIMIT,
-    mm::{UserPtr, vm_load_string},
+    mm::{UserConstPtr, UserPtr, vm_load_string},
     pseudofs::{Device, dev::tty},
     syscall::sys::{sys_getegid, sys_geteuid},
     task::AsThread,
@@ -155,6 +155,137 @@ bitflags! {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileLock {
+    pid: u64,
+    start: u64,
+    len: u64,
+    typ: i16,
+}
+
+#[derive(Default)]
+struct LockState {
+    locks: BTreeMap<u64, Vec<FileLock>>,
+}
+
+lazy_static::lazy_static! {
+    static ref LOCK_STATE: axsync::Mutex<LockState> = axsync::Mutex::new(LockState::default());
+}
+
+fn current_pid() -> u64 {
+    current().as_thread().proc_data.proc.pid().into()
+}
+
+pub fn release_locks_for_pid(pid: u64) {
+    let mut state = LOCK_STATE.lock();
+    for locks in state.locks.values_mut() {
+        locks.retain(|lock| lock.pid != pid);
+    }
+}
+
+fn lock_range_to_abs(file: &File, flock: &flock64) -> AxResult<(u64, u64)> {
+    let base = match flock.l_whence as u32 {
+        SEEK_SET => 0,
+        SEEK_CUR => file.position()?,
+        SEEK_END => file.inner().location().len().unwrap_or_default() as u64,
+        _ => return Err(AxError::InvalidInput),
+    };
+    let start = base.checked_add_signed(flock.l_start).ok_or(AxError::InvalidInput)?;
+    let len = if flock.l_len == 0 {
+        file.inner().location().len().unwrap_or_default() as u64
+    } else if flock.l_len > 0 {
+        flock.l_len as u64
+    } else {
+        return Err(AxError::InvalidInput);
+    };
+    Ok((start, len))
+}
+
+fn overlap(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> bool {
+    let a_end = a_start.saturating_add(a_len);
+    let b_end = b_start.saturating_add(b_len);
+    a_start < b_end && b_start < a_end
+}
+
+fn map_lock_range(file: &File, flock: &flock64) -> AxResult<(u64, u64)> {
+    lock_range_to_abs(file, flock)
+}
+
+fn locks_conflict(query_type: i16, existing_type: i16) -> bool {
+    query_type == F_WRLCK as i16 || existing_type == F_WRLCK as i16
+}
+
+fn conflicting_lock(file: &File, flock: &flock64) -> AxResult<Option<FileLock>> {
+    let key = file.inner().location().inode() as u64;
+    let pid = current_pid();
+    let (query_start, query_len) = map_lock_range(file, flock)?;
+    let state = LOCK_STATE.lock();
+    Ok(state.locks.get(&key).and_then(|locks| {
+        locks
+            .iter()
+            .find(|lock| {
+                lock.pid != pid
+                    && overlap(query_start, query_len, lock.start, lock.len)
+                    && locks_conflict(flock.l_type, lock.typ)
+            })
+            .copied()
+    }))
+}
+
+fn get_file_lock(file: &File, flock: &mut flock64) -> AxResult<()> {
+    if let Some(lock) = conflicting_lock(file, flock)? {
+        flock.l_type = lock.typ as _;
+        flock.l_start = lock.start as _;
+        flock.l_len = lock.len as _;
+        flock.l_pid = lock.pid as _;
+        return Ok(());
+    }
+    flock.l_type = F_UNLCK as _;
+    Ok(())
+}
+
+fn set_file_lock(file: &File, flock: &flock64) -> AxResult<Option<FileLock>> {
+    let key = file.inner().location().inode() as u64;
+    let pid = current_pid();
+    let (start, len) = map_lock_range(file, flock)?;
+    let mut state = LOCK_STATE.lock();
+    let locks = state.locks.entry(key).or_default();
+    if flock.l_type == F_UNLCK as _ {
+        locks.retain(|lock| !(lock.pid == pid && overlap(start, len, lock.start, lock.len)));
+        return Ok(None);
+    }
+    if flock.l_type != F_RDLCK as _ && flock.l_type != F_WRLCK as _ {
+        return Err(AxError::InvalidInput);
+    }
+    if let Some(conflict) = locks
+        .iter()
+        .find(|lock| {
+            lock.pid != pid
+                && overlap(start, len, lock.start, lock.len)
+                && locks_conflict(flock.l_type, lock.typ)
+        })
+        .copied()
+    {
+        return Ok(Some(conflict));
+    }
+    locks.retain(|lock| !(lock.pid == pid && overlap(start, len, lock.start, lock.len)));
+    locks.push(FileLock { pid, start, len, typ: flock.l_type });
+    Ok(None)
+}
+
+pub fn release_locks_for_fd(fd: c_int) {
+    if let Ok(file) = get_file_like(fd) {
+        if let Some(file) = file.downcast_ref::<File>() {
+            let key = file.inner().location().inode() as u64;
+            let pid = current_pid();
+            let mut state = LOCK_STATE.lock();
+            if let Some(locks) = state.locks.get_mut(&key) {
+                locks.retain(|lock| lock.pid != pid);
+            }
+        }
+    }
+}
+
 pub fn sys_close_range(first: i32, last: i32, flags: u32) -> AxResult<isize> {
     if first < 0 || last < first {
         return Err(AxError::InvalidInput);
@@ -194,14 +325,20 @@ fn dup_fd(old_fd: c_int, cloexec: bool) -> AxResult<isize> {
 }
 
 fn dup_fd_at(old_fd: c_int, min_fd: i32, cloexec: bool) -> AxResult<isize> {
+    if min_fd < 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     let f = get_file_like(old_fd)?;
     let max_nofile = current().as_thread().proc_data.rlim.read()[RLIMIT_NOFILE].current;
-    let mut table = FD_TABLE.write();
-    if table.count() as u64 >= max_nofile {
+    let limit = (max_nofile as usize).min(AX_FILE_LIMIT);
+    let fd = min_fd as usize;
+    if fd >= limit {
         return Err(AxError::TooManyOpenFiles);
     }
-    let mut fd = min_fd as usize;
-    let limit = (max_nofile as usize).min(AX_FILE_LIMIT);
+
+    let mut table = FD_TABLE.write();
+    let mut fd = fd;
     while fd < limit {
         match table.add_at(fd, FileDescriptor {
             inner: f.clone(),
@@ -264,11 +401,25 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
     match cmd as u32 {
         F_DUPFD => dup_fd_at(fd, arg as i32, false),
         F_DUPFD_CLOEXEC => dup_fd_at(fd, arg as i32, true),
-        F_SETLK | F_SETLKW => Ok(0),
-        F_OFD_SETLK | F_OFD_SETLKW => Ok(0),
-        F_GETLK | F_OFD_GETLK => {
-            let arg = UserPtr::<flock64>::from(arg);
-            arg.get_as_mut()?.l_type = F_UNLCK as _;
+        F_SETLK | F_SETLKW => {
+            let file = File::from_fd(fd)?;
+            let flock = UserConstPtr::<flock64>::from(arg).get_as_ref()?;
+            loop {
+                if let Some(_conflict) = set_file_lock(&file, flock)? {
+                    if cmd as u32 == F_SETLK {
+                        return Err(AxError::from(LinuxError::EAGAIN));
+                    }
+                    continue;
+                }
+                return Ok(0);
+            }
+        }
+        F_OFD_SETLK | F_OFD_SETLKW | F_OFD_GETLK => Err(AxError::InvalidInput),
+        F_GETLK => {
+            let file = File::from_fd(fd)?;
+            let mut flock = *UserConstPtr::<flock64>::from(arg).get_as_ref()?;
+            get_file_lock(&file, &mut flock)?;
+            *UserPtr::<flock64>::from(arg).get_as_mut()? = flock;
             Ok(0)
         }
         F_SETFL => {
@@ -334,10 +485,7 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
             pipe.resize(arg)?;
             Ok(0)
         }
-        _ => {
-            warn!("unsupported fcntl parameters: cmd: {cmd}");
-            Ok(0)
-        }
+        _ => Err(AxError::InvalidInput),
     }
 }
 
