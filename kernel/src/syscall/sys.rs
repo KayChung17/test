@@ -3,6 +3,9 @@ use core::ffi::c_char;
 
 use axconfig::ARCH;
 use axerrno::{AxError, AxResult};
+use axtask::current;
+
+use crate::task::AsThread;
 use axfs::FS_CONTEXT;
 use linux_raw_sys::{
     general::{GRND_INSECURE, GRND_NONBLOCK, GRND_RANDOM},
@@ -13,28 +16,30 @@ use starry_vm::{VmMutPtr, vm_write_slice};
 use crate::task::processes;
 
 pub fn sys_getuid() -> AxResult<isize> {
-    Ok(0)
+    Ok(current().as_thread().proc_data.uid() as isize)
 }
 
 pub fn sys_geteuid() -> AxResult<isize> {
-    Ok(0)
+    Ok(current().as_thread().proc_data.uid() as isize)
 }
 
 pub fn sys_getgid() -> AxResult<isize> {
-    Ok(0)
+    Ok(current().as_thread().proc_data.gid() as isize)
 }
 
 pub fn sys_getegid() -> AxResult<isize> {
+    Ok(current().as_thread().proc_data.gid() as isize)
+}
+
+pub fn sys_setuid(uid: u32) -> AxResult<isize> {
+    debug!("sys_setuid <= uid: {uid}");
+    current().as_thread().proc_data.set_uid(uid);
     Ok(0)
 }
 
-pub fn sys_setuid(_uid: u32) -> AxResult<isize> {
-    debug!("sys_setuid <= uid: {_uid}");
-    Ok(0)
-}
-
-pub fn sys_setgid(_gid: u32) -> AxResult<isize> {
-    debug!("sys_setgid <= gid: {_gid}");
+pub fn sys_setgid(gid: u32) -> AxResult<isize> {
+    debug!("sys_setgid <= gid: {gid}");
+    current().as_thread().proc_data.set_gid(gid);
     Ok(0)
 }
 

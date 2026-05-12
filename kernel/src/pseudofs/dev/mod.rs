@@ -190,6 +190,15 @@ fn builder(fs: Arc<SimpleFs>) -> DirMaker {
         ),
     );
     root.add(
+        "kmsg",
+        Device::new(
+            fs.clone(),
+            NodeType::CharacterDevice,
+            DeviceId::new(1, 11),
+            Arc::new(Null),
+        ),
+    );
+    root.add(
         "rtc0",
         Device::new(
             fs.clone(),

@@ -212,6 +212,7 @@ pub fn add_file_like(f: Arc<dyn FileLike>, cloexec: bool) -> AxResult<c_int> {
 
 /// Close a file by `fd`.
 pub fn close_file_like(fd: c_int) -> AxResult {
+    crate::syscall::release_locks_for_fd(fd);
     let f = FD_TABLE
         .write()
         .remove(fd as usize)

@@ -14,70 +14,76 @@ fi
 echo "=== Starry OS Competition Mode ==="
 echo "Test dir: $TEST_DIR"
 
-PASS=0
-FAIL=0
-SKIP=0
-
-# ---- basic syscall tests ----
-echo "[SUITE-BEGIN] basic"
-
-BASIC_DIR="$TEST_DIR/basic"
-BASIC_TESTS="brk chdir clone close dup dup2 execve exit fork fstat getcwd getdents getpid getppid gettimeofday mkdir_ mmap mount munmap open openat pipe read sleep test_echo times umount uname unlink wait waitpid write yield"
-
-for t in $BASIC_TESTS; do
-    bin="$BASIC_DIR/$t"
-    if [ -x "$bin" ]; then
-        echo "[CASE-BEGIN] $t"
-        "$bin"
-        rc=$?
-        if [ "$rc" -eq 0 ]; then
-            PASS=$((PASS + 1))
-        else
-            FAIL=$((FAIL + 1))
-        fi
-        echo "[CASE-END] $t code=$rc"
-    else
-        echo "[CASE-SKIP] $t (missing)"
-        SKIP=$((SKIP + 1))
-    fi
-done
-
-echo "[SUITE-END] basic"
-echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
-
 # ---- glibc dynamic linker setup ----
-# LTP binaries need ld-linux-riscv64-lp64d.so.1 at /lib
 GLIBC_LIB="$TEST_DIR/lib"
 ln -sf "$GLIBC_LIB/ld-linux-riscv64-lp64d.so.1" /lib/
 ln -sf "$GLIBC_LIB/libc.so.6" /lib/
 ln -sf "$GLIBC_LIB/libm.so.6" /lib/
 
-# ---- LTP fs tests ----
-LTP_DIR="$TEST_DIR/ltp/testcases/bin"
-echo "[SUITE-BEGIN] ltp-fs"
+cd "$TEST_DIR"
 
-LTP_FS_TESTS="fchmod01 fchmod02 fchmod03 fchmod04 fchmod05 fchmod06 fchmodat01 fchmodat02"
+# ---- scan for test entry points ----
+SCRIPTS=$(ls *_testcode.sh 2>/dev/null | sort)
 
-for t in $LTP_FS_TESTS; do
-    bin="$LTP_DIR/$t"
-    if [ -x "$bin" ]; then
-        echo "[CASE-BEGIN] $t"
-        "$bin"
-        rc=$?
-        if [ "$rc" -eq 0 ]; then
-            PASS=$((PASS + 1))
-        else
-            FAIL=$((FAIL + 1))
-        fi
-        echo "[CASE-END] $t code=$rc"
-    else
-        echo "[CASE-SKIP] $t (missing)"
-        SKIP=$((SKIP + 1))
+if [ -z "$SCRIPTS" ]; then
+    echo "[SUMMARY] no testcode scripts found in $TEST_DIR"
+    echo "=== tests done, powering off ==="
+    exit 0
+fi
+
+SUITE_PASS=0
+SUITE_FAIL=0
+SUITE_SKIP=0
+
+# ---- bench-type recognition helpers ----
+is_aggregate() {
+    # aggregate = script-driven batch bench whose run-all.sh lives in
+    # the top-level glibc dir (not in a subdirectory). Currently only
+    # libc-test uses this pattern: run-all.sh + entry-*.exe + runtest.exe
+    local name="$1"
+    [ "$name" = "libctest" ] && \
+    [ -x ./run-all.sh ] && [ -x ./entry-static.exe ] && \
+    [ -x ./entry-dynamic.exe ] && [ -x ./runtest.exe ]
+}
+
+is_directory_scan() {
+    # directory-scan: has a subdirectory with its own run-all.sh
+    # (basic/, ltp/, etc.)
+    local dir="$1"
+    [ -d "./$dir" ] && [ -x "./$dir/run-all.sh" ]
+}
+
+for script in $SCRIPTS; do
+    name="${script%_testcode.sh}"
+    echo "[SUITE-BEGIN] $name"
+
+    if [ ! -x "$script" ]; then
+        echo "[SUITE-SKIP] $name (not executable)"
+        SUITE_SKIP=$((SUITE_SKIP + 1))
+        echo "[SUITE-END] $name"
+        continue
     fi
+
+    # recognize bench type
+    if is_aggregate "$name"; then
+        echo "[SUITE-TYPE] aggregate"
+    elif is_directory_scan "$name"; then
+        echo "[SUITE-TYPE] directory-scan"
+    else
+        echo "[SUITE-TYPE] standalone"
+    fi
+
+    /bin/sh "$script"
+    rc=$?
+
+    echo "[SUITE-RESULT] $name exit=$rc"
+    if [ "$rc" -eq 0 ]; then
+        SUITE_PASS=$((SUITE_PASS + 1))
+    else
+        SUITE_FAIL=$((SUITE_FAIL + 1))
+    fi
+    echo "[SUITE-END] $name"
 done
 
-echo "[SUITE-END] ltp-fs"
-echo "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
-
-# ---- all done ----
+echo "[SUMMARY] suites=$((SUITE_PASS + SUITE_FAIL + SUITE_SKIP)) pass=$SUITE_PASS fail=$SUITE_FAIL skip=$SUITE_SKIP"
 echo "=== tests done, powering off ==="

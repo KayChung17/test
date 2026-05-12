@@ -159,7 +159,7 @@ bitflags! {
 struct FileLock {
     pid: u64,
     start: u64,
-    len: u64,
+    end: Option<u64>,
     typ: i16,
 }
 
@@ -183,7 +183,7 @@ pub fn release_locks_for_pid(pid: u64) {
     }
 }
 
-fn lock_range_to_abs(file: &File, flock: &flock64) -> AxResult<(u64, u64)> {
+fn lock_range_to_abs(file: &File, flock: &flock64) -> AxResult<(u64, Option<u64>)> {
     let base = match flock.l_whence as u32 {
         SEEK_SET => 0,
         SEEK_CUR => file.position()?,
@@ -191,23 +191,87 @@ fn lock_range_to_abs(file: &File, flock: &flock64) -> AxResult<(u64, u64)> {
         _ => return Err(AxError::InvalidInput),
     };
     let start = base.checked_add_signed(flock.l_start).ok_or(AxError::InvalidInput)?;
-    let len = if flock.l_len == 0 {
-        file.inner().location().len().unwrap_or_default() as u64
+    let end = if flock.l_len == 0 {
+        None
     } else if flock.l_len > 0 {
-        flock.l_len as u64
+        Some(start.checked_add(flock.l_len as u64).ok_or(AxError::InvalidInput)?)
     } else {
         return Err(AxError::InvalidInput);
     };
-    Ok((start, len))
+    Ok((start, end))
 }
 
-fn overlap(a_start: u64, a_len: u64, b_start: u64, b_len: u64) -> bool {
-    let a_end = a_start.saturating_add(a_len);
-    let b_end = b_start.saturating_add(b_len);
-    a_start < b_end && b_start < a_end
+fn overlap(a_start: u64, a_end: Option<u64>, b_start: u64, b_end: Option<u64>) -> bool {
+    if let Some(a_end) = a_end {
+        if b_start >= a_end {
+            return false;
+        }
+    }
+    if let Some(b_end) = b_end {
+        if a_start >= b_end {
+            return false;
+        }
+    }
+    true
 }
 
-fn map_lock_range(file: &File, flock: &flock64) -> AxResult<(u64, u64)> {
+fn range_extends_past(end: Option<u64>, point: u64) -> bool {
+    match end {
+        Some(end) => end > point,
+        None => true,
+    }
+}
+
+fn retain_unlocked_segments(lock: FileLock, start: u64, end: Option<u64>, out: &mut Vec<FileLock>) {
+    if !overlap(start, end, lock.start, lock.end) {
+        out.push(lock);
+        return;
+    }
+
+    if lock.start < start {
+        out.push(FileLock {
+            start: lock.start,
+            end: Some(start),
+            ..lock
+        });
+    }
+
+    if let Some(end) = end {
+        if range_extends_past(lock.end, end) {
+            out.push(FileLock {
+                start: end,
+                end: lock.end,
+                ..lock
+            });
+        }
+    }
+}
+
+fn merge_same_owner_locks(locks: &mut Vec<FileLock>) {
+    locks.sort_by_key(|lock| (lock.pid, lock.typ, lock.start, lock.end.unwrap_or(u64::MAX)));
+
+    let mut merged: Vec<FileLock> = Vec::with_capacity(locks.len());
+    for lock in locks.drain(..) {
+        if let Some(prev) = merged.last_mut() {
+            let same_owner = prev.pid == lock.pid && prev.typ == lock.typ;
+            let touching = match prev.end {
+                Some(prev_end) => lock.start <= prev_end,
+                None => true,
+            };
+            if same_owner && touching {
+                prev.end = match (prev.end, lock.end) {
+                    (None, _) | (_, None) => None,
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                };
+                continue;
+            }
+        }
+        merged.push(lock);
+    }
+    *locks = merged;
+}
+
+fn map_lock_range(file: &File, flock: &flock64) -> AxResult<(u64, Option<u64>)> {
     lock_range_to_abs(file, flock)
 }
 
@@ -218,16 +282,17 @@ fn locks_conflict(query_type: i16, existing_type: i16) -> bool {
 fn conflicting_lock(file: &File, flock: &flock64) -> AxResult<Option<FileLock>> {
     let key = file.inner().location().inode() as u64;
     let pid = current_pid();
-    let (query_start, query_len) = map_lock_range(file, flock)?;
+    let (query_start, query_end) = map_lock_range(file, flock)?;
     let state = LOCK_STATE.lock();
     Ok(state.locks.get(&key).and_then(|locks| {
         locks
             .iter()
-            .find(|lock| {
+            .filter(|lock| {
                 lock.pid != pid
-                    && overlap(query_start, query_len, lock.start, lock.len)
+                    && overlap(query_start, query_end, lock.start, lock.end)
                     && locks_conflict(flock.l_type, lock.typ)
             })
+            .min_by_key(|lock| (lock.start, lock.end.unwrap_or(u64::MAX), lock.pid))
             .copied()
     }))
 }
@@ -236,7 +301,10 @@ fn get_file_lock(file: &File, flock: &mut flock64) -> AxResult<()> {
     if let Some(lock) = conflicting_lock(file, flock)? {
         flock.l_type = lock.typ as _;
         flock.l_start = lock.start as _;
-        flock.l_len = lock.len as _;
+        flock.l_len = match lock.end {
+            Some(end) => end.checked_sub(lock.start).ok_or(AxError::InvalidInput)? as _,
+            None => 0,
+        };
         flock.l_pid = lock.pid as _;
         return Ok(());
     }
@@ -247,29 +315,47 @@ fn get_file_lock(file: &File, flock: &mut flock64) -> AxResult<()> {
 fn set_file_lock(file: &File, flock: &flock64) -> AxResult<Option<FileLock>> {
     let key = file.inner().location().inode() as u64;
     let pid = current_pid();
-    let (start, len) = map_lock_range(file, flock)?;
+    let (start, end) = map_lock_range(file, flock)?;
     let mut state = LOCK_STATE.lock();
     let locks = state.locks.entry(key).or_default();
-    if flock.l_type == F_UNLCK as _ {
-        locks.retain(|lock| !(lock.pid == pid && overlap(start, len, lock.start, lock.len)));
-        return Ok(None);
-    }
-    if flock.l_type != F_RDLCK as _ && flock.l_type != F_WRLCK as _ {
+
+    if flock.l_type != F_UNLCK as _ && flock.l_type != F_RDLCK as _ && flock.l_type != F_WRLCK as _ {
         return Err(AxError::InvalidInput);
     }
+
     if let Some(conflict) = locks
         .iter()
-        .find(|lock| {
+        .filter(|lock| {
             lock.pid != pid
-                && overlap(start, len, lock.start, lock.len)
+                && overlap(start, end, lock.start, lock.end)
                 && locks_conflict(flock.l_type, lock.typ)
         })
+        .min_by_key(|lock| (lock.start, lock.end.unwrap_or(u64::MAX), lock.pid))
         .copied()
     {
         return Ok(Some(conflict));
     }
-    locks.retain(|lock| !(lock.pid == pid && overlap(start, len, lock.start, lock.len)));
-    locks.push(FileLock { pid, start, len, typ: flock.l_type });
+
+    let mut updated = Vec::with_capacity(locks.len() + usize::from(flock.l_type != F_UNLCK as _));
+    for lock in locks.drain(..) {
+        if lock.pid == pid {
+            retain_unlocked_segments(lock, start, end, &mut updated);
+        } else {
+            updated.push(lock);
+        }
+    }
+
+    if flock.l_type != F_UNLCK as _ {
+        updated.push(FileLock {
+            pid,
+            start,
+            end,
+            typ: flock.l_type,
+        });
+    }
+
+    merge_same_owner_locks(&mut updated);
+    *locks = updated;
     Ok(None)
 }
 

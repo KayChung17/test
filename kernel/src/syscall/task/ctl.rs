@@ -53,15 +53,69 @@ pub fn sys_umask(mask: u32) -> AxResult<isize> {
     Ok(old as isize)
 }
 
-pub fn sys_setreuid(_ruid: u32, _euid: u32) -> AxResult<isize> {
+pub fn sys_setreuid(ruid: u32, euid: u32) -> AxResult<isize> {
+    let curr = current();
+    let proc_data = &curr.as_thread().proc_data;
+    let uid = if euid != u32::MAX {
+        euid
+    } else if ruid != u32::MAX {
+        ruid
+    } else {
+        proc_data.uid()
+    };
+    proc_data.set_uid(uid);
     Ok(0)
 }
 
-pub fn sys_setresuid(_ruid: u32, _euid: u32, _suid: u32) -> AxResult<isize> {
+pub fn sys_setresuid(ruid: u32, euid: u32, suid: u32) -> AxResult<isize> {
+    let curr = current();
+    let proc_data = &curr.as_thread().proc_data;
+    let uid = [euid, ruid, suid]
+        .into_iter()
+        .find(|uid| *uid != u32::MAX)
+        .unwrap_or_else(|| proc_data.uid());
+    proc_data.set_uid(uid);
     Ok(0)
 }
 
-pub fn sys_setresgid(_rgid: u32, _egid: u32, _sgid: u32) -> AxResult<isize> {
+pub fn sys_setresgid(rgid: u32, egid: u32, sgid: u32) -> AxResult<isize> {
+    let curr = current();
+    let proc_data = &curr.as_thread().proc_data;
+    let gid = [egid, rgid, sgid]
+        .into_iter()
+        .find(|gid| *gid != u32::MAX)
+        .unwrap_or_else(|| proc_data.gid());
+    proc_data.set_gid(gid);
+    Ok(0)
+}
+
+pub fn sys_setregid(rgid: u32, egid: u32) -> AxResult<isize> {
+    let curr = current();
+    let proc_data = &curr.as_thread().proc_data;
+    let gid = if egid != u32::MAX {
+        egid
+    } else if rgid != u32::MAX {
+        rgid
+    } else {
+        proc_data.gid()
+    };
+    proc_data.set_gid(gid);
+    Ok(0)
+}
+
+pub fn sys_getresuid(ruid: *mut u32, euid: *mut u32, suid: *mut u32) -> AxResult<isize> {
+    let uid = current().as_thread().proc_data.uid();
+    ruid.vm_write(uid)?;
+    euid.vm_write(uid)?;
+    suid.vm_write(uid)?;
+    Ok(0)
+}
+
+pub fn sys_getresgid(rgid: *mut u32, egid: *mut u32, sgid: *mut u32) -> AxResult<isize> {
+    let gid = current().as_thread().proc_data.gid();
+    rgid.vm_write(gid)?;
+    egid.vm_write(gid)?;
+    sgid.vm_write(gid)?;
     Ok(0)
 }
 

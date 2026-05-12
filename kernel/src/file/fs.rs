@@ -1,4 +1,4 @@
-use alloc::{borrow::Cow, string::ToString, sync::Arc};
+use alloc::{borrow::Cow, string::ToString, sync::Arc, vec::Vec};
 use core::{
     ffi::c_int,
     hint::likely,
@@ -6,13 +6,19 @@ use core::{
     task::Context,
 };
 
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axfs::{FS_CONTEXT, FsContext};
 use axfs_ng_vfs::{Location, Metadata, NodeFlags};
+use axio::{Seek, SeekFrom};
 use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
-use axtask::future::{block_on, poll_io};
-use linux_raw_sys::general::{AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW};
+use axtask::{current, future::{block_on, poll_io}, yield_now};
+use hashbrown::HashMap;
+use lazy_static::lazy_static;
+use linux_raw_sys::general::{
+    flock64, AT_EMPTY_PATH, AT_FDCWD, AT_SYMLINK_NOFOLLOW, F_RDLCK, F_UNLCK, F_WRLCK,
+    SEEK_CUR, SEEK_END, SEEK_SET,
+};
 
 use super::{FileLike, Kstat, get_file_like};
 use crate::file::{IoDst, IoSrc};
@@ -138,6 +144,11 @@ impl File {
 
     pub fn flags(&self) -> u32 {
         self.flags
+    }
+
+    pub fn position(&self) -> AxResult<u64> {
+        let mut inner = self.inner();
+        inner.seek(SeekFrom::Current(0)).map_err(Into::into)
     }
 
     fn is_blocking(&self) -> bool {
