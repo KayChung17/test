@@ -123,13 +123,13 @@ This will download rootfs image from [Starry-OS/rootfs](https://github.com/Starr
 1. 评测盘
 默认放置为 `make/test.img`（或任意路径，通过 `TEST_IMG` 指定）
 
-- 下载非完整版比赛测评盘
+- 下载比赛测评盘
 
    ```bash
-   wget https://github.com/LearningOS/rust-based-os-comp2025/releases/download/alpine-linux-riscv64-ext4fs/alpine-linux-riscv64-ext4fs.img.xz
-   ```
+   wget https://github.com/oscomp/testsuits-for-oskernel/releases/download/pre-20250615/sdcard-la.img.xz
+   wget https://github.com/oscomp/testsuits-for-oskernel/releases/download/pre-20250615/sdcard-rv.img.xz
 
-- 完整测评盘基于比赛要求，在docker中用提供的镜像编译
+   ```
 
 2. 从评测盘提取文件生成辅助根文件系统镜像：
 
