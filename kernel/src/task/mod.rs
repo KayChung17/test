@@ -220,6 +220,8 @@ pub struct ProcessData {
     umask: AtomicU32,
     uid: AtomicU32,
     gid: AtomicU32,
+    /// Nice value for scheduling priority.
+    nice: AtomicI32,
 }
 
 impl ProcessData {
@@ -256,6 +258,7 @@ impl ProcessData {
             umask: AtomicU32::new(0o022),
             uid: AtomicU32::new(0),
             gid: AtomicU32::new(0),
+            nice: AtomicI32::new(0),
         })
     }
 
@@ -304,5 +307,13 @@ impl ProcessData {
 
     pub fn set_gid(&self, gid: u32) {
         self.gid.store(gid, Ordering::SeqCst);
+    }
+
+    pub fn nice(&self) -> i32 {
+        self.nice.load(Ordering::SeqCst)
+    }
+
+    pub fn set_nice(&self, nice: i32) {
+        self.nice.store(nice, Ordering::SeqCst);
     }
 }

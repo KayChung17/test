@@ -85,6 +85,9 @@ optional = true
 [patch.crates-io]
 axruntime = { path = "third_party/arceos/axruntime" }
 axfs-ng = { path = "third_party/arceos/axfs" }
+axsched = { path = "third_party/axsched" }
+axtask = { path = "third_party/axtask" }
+axnet-ng = { path = "third_party/axnet-ng" }
 
 [package.metadata.vendor-filter]
 platforms = ["riscv64gc-unknown-none-elf", "loongarch64-unknown-none-softfloat"]

@@ -3,7 +3,7 @@ use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use axerrno::{AxError, AxResult, LinuxError};
 use axhal::time::monotonic_time_nanos;
 use axsync::Mutex;
-use axtask::current;
+use axtask::{WaitQueue, current};
 use bytemuck::AnyBitPattern;
 use linux_raw_sys::general::*;
 use starry_process::Pid;
@@ -88,6 +88,10 @@ pub struct MessageQueue {
     pub total_bytes: usize,
     /// Marked for removal
     pub mark_removed: bool,
+    /// Wait queue for blocked senders
+    pub send_wait_queue: Arc<WaitQueue>,
+    /// Wait queue for blocked receivers
+    pub recv_wait_queue: Arc<WaitQueue>,
 }
 
 impl MessageQueue {
@@ -98,6 +102,8 @@ impl MessageQueue {
             messages: BTreeMap::new(),
             total_bytes: 0,
             mark_removed: false,
+            send_wait_queue: Arc::new(WaitQueue::new()),
+            recv_wait_queue: Arc::new(WaitQueue::new()),
         }
     }
 
@@ -435,14 +441,14 @@ pub fn sys_msgsnd(
     let current_pid = proc_data.proc.pid();
     let flags = MsgSndFlags::from_bits_truncate(msgflg);
 
-    let msg_queue = {
+    let msg_queue_arc = {
         let msg_manager = MSG_MANAGER.lock();
         msg_manager
             .get_queue_by_msqid(msqid)
             .ok_or(AxError::from(LinuxError::EINVAL))? // EINVAL - queue does not exist
     };
 
-    let mut msg_queue = msg_queue.lock();
+    let mut msg_queue = msg_queue_arc.lock();
 
     if !has_ipc_permission(
         &msg_queue.msqid_ds.msg_perm,
@@ -465,48 +471,50 @@ pub fn sys_msgsnd(
     let mtext_ptr = unsafe { core::ptr::addr_of!((*msgp).mtext) };
     let data_vec = vm_load(mtext_ptr.cast::<u8>(), msgsz)?;
 
-    // check if the message queue is marked for removal
-    // Note: According to Linux manpage, both byte count and message count
-    // are limited by msg_qbytes field (this appears to be the actual behavior)
-    let would_exceed_bytes =
-        msg_queue.total_bytes + data_vec.len() > msg_queue.msqid_ds.msg_qbytes as usize;
-    let would_exceed_messages =
-        (msg_queue.msqid_ds.msg_qnum + 1) as usize > msg_queue.msqid_ds.msg_qbytes as usize;
+    // Try to enqueue, blocking if necessary and IPC_NOWAIT is not set.
+    loop {
+        let would_exceed_bytes =
+            msg_queue.total_bytes + data_vec.len() > msg_queue.msqid_ds.msg_qbytes as usize;
+        let would_exceed_messages =
+            (msg_queue.msqid_ds.msg_qnum + 1) as usize > msg_queue.msqid_ds.msg_qbytes as usize;
 
-    if would_exceed_bytes || would_exceed_messages {
-        // If the non-blocking flag is specified, return an error immediately
+        if !would_exceed_bytes && !would_exceed_messages {
+            break;
+        }
+
         if flags.contains(MsgSndFlags::IPC_NOWAIT) {
             return Err(AxError::from(LinuxError::EAGAIN)); // EAGAIN
         }
 
-        // TODO:
-        warn!("sys_msgsnd: blocking send not implemented, returning EAGAIN");
-        // Otherwise, block and wait (blocking logic needs to be implemented
-        // here) In the actual implementation, this should:
-        // - Add the current task to the wait queue
-        // - Yield the CPU and wait to be woken up when there is space in the
-        //   queue
-        // - After being woken up, recheck the condition
-        // Note: It may be interrupted by a signal returning EINTR, or the queue
-        // may be deleted returning EIDRM
+        // Block and wait for space to become available.
+        let send_wq = msg_queue.send_wait_queue.clone();
+        drop(msg_queue); // Release the lock before blocking
 
-        return Err(AxError::from(LinuxError::EAGAIN)); // EAGAIN
+        send_wq.wait_until(|| {
+            let guard = msg_queue_arc.lock();
+            if guard.mark_removed {
+                return true;
+            }
+            guard.total_bytes + data_vec.len() <= guard.msqid_ds.msg_qbytes as usize
+                && (guard.msqid_ds.msg_qnum + 1) as usize <= guard.msqid_ds.msg_qbytes as usize
+        });
+
+        // Re-acquire the lock
+        msg_queue = msg_queue_arc.lock();
+
+        if msg_queue.mark_removed {
+            return Err(AxError::from(LinuxError::EIDRM)); // EIDRM
+        }
     }
 
     msg_queue.enqueue_message(mtype, data_vec)?;
 
     msg_queue.msqid_ds.msg_lspid = current_pid as _;
-
     msg_queue.msqid_ds.msg_stime = monotonic_time_nanos() as _;
 
-    // note:msg_qnum and msg_cbytes updated in enqueue_message
+    // Wake up waiting receivers
+    msg_queue.recv_wait_queue.notify_all(false);
 
-    // TODO:
-    warn!("sys_msgsnd: wakeup of waiting receivers not implemented");
-    // If there are processes waiting to receive messages, wake them up
-    // In the actual implementation, this should:
-    // - Check if there are tasks in the message queue's wait queue
-    // - If so, wake up these tasks
     Ok(0)
 }
 
@@ -538,14 +546,14 @@ pub fn sys_msgrcv(
     }
 
     // Get the message queue
-    let msg_queue = {
+    let msg_queue_arc = {
         let msg_manager = MSG_MANAGER.lock();
         msg_manager
             .get_queue_by_msqid(msqid)
             .ok_or(AxError::from(LinuxError::EINVAL))? // EINVAL
     };
 
-    let mut msg_queue = msg_queue.lock();
+    let mut msg_queue = msg_queue_arc.lock();
 
     // Permission check
     if !has_ipc_permission(
@@ -606,14 +614,44 @@ pub fn sys_msgrcv(
                     return Err(AxError::from(LinuxError::ENOMSG)); // ENOMSG
                 }
 
-                // TODO:
-                warn!("sys_msgrcv: blocking receive not implemented, returning ENOMSG");
-                // The complete implementation should:
-                // - Add the current task to the receive wait queue
-                // - Block and wait, possibly interrupted by signals (EINTR) or queue removal
-                //   (EIDRM)
-                // Simplified: blocking is not supported, directly return an error
-                return Err(AxError::from(LinuxError::ENOMSG)); // ENOMSG
+                // Block and wait for a message to arrive.
+                let recv_wq = msg_queue.recv_wait_queue.clone();
+                drop(msg_queue); // Release the lock before blocking
+
+                recv_wq.wait_until(|| {
+                    let guard = msg_queue_arc.lock();
+                    guard.mark_removed || !guard.messages.is_empty()
+                });
+
+                // Re-acquire the lock and re-try the search
+                msg_queue = msg_queue_arc.lock();
+
+                if msg_queue.mark_removed {
+                    return Err(AxError::from(LinuxError::EIDRM)); // EIDRM
+                }
+
+                // Re-check for a matching message; if still none, return ENOMSG
+                // (should not normally happen since wait_until checks !is_empty)
+                let re_matched = match msgtyp {
+                    0 => msg_queue.find_first_message(),
+                    typ if typ > 0 => {
+                        if flags.contains(MsgRcvFlags::MSG_EXCEPT) {
+                            msg_queue.find_message_not_equal(typ)
+                        } else {
+                            msg_queue.find_message_by_type(typ)
+                        }
+                    }
+                    typ if typ < 0 => {
+                        let abs_typ = typ.abs();
+                        msg_queue.find_message_less_equal(abs_typ)
+                    }
+                    _ => None,
+                };
+
+                match re_matched {
+                    Some((mtype, data_slice)) => (mtype, data_slice),
+                    None => return Err(AxError::from(LinuxError::ENOMSG)),
+                }
             }
         };
 
@@ -651,12 +689,8 @@ pub fn sys_msgrcv(
         msg_queue.msqid_ds.msg_lrpid = current_pid as _;
         msg_queue.msqid_ds.msg_rtime = monotonic_time_nanos() as _;
 
-        // TODO:
-        warn!("sys_msgrcv: wakeup of waiting senders not implemented");
-        // Wake up waiting senders (Simplified: not implemented)
-        // while let Some(task) = msg_queue.send_wait_queue.pop_front() {
-        //     wakeup(task);
-        // }
+        // Wake up waiting senders (space just became available)
+        msg_queue.send_wait_queue.notify_all(false);
     } else {
         // MSG_COPY mode: only update last receiver info, do not update queue statistics
         msg_queue.msqid_ds.msg_lrpid = current_pid as _;
@@ -851,20 +885,15 @@ pub fn sys_msgctl(msqid: i32, cmd: i32, buf: usize) -> AxResult<isize> {
         // Mark the queue as removed
         msg_queue.mark_removed = true;
 
+        // Wake up all waiting senders and receivers (they will return EIDRM)
+        msg_queue.send_wait_queue.notify_all(false);
+        msg_queue.recv_wait_queue.notify_all(false);
+
         // If the queue is empty, delete it immediately
         if msg_queue.msqid_ds.msg_qnum == 0 {
             drop(msg_queue); // Release the lock to avoid deadlock
 
             MSG_MANAGER.lock().remove_msqid(msqid);
-
-            // TODO:
-            warn!(
-                "sys_msgctl[IPC_RMID]: wakeup of waiting processes after queue deletion not \
-                 implemented"
-            );
-            // Wake up all waiting processes (simplified: not implemented yet)
-            // According to man-page: wake up all waiting readers and writers (returning
-            // EIDRM error)
 
             return Ok(0);
         }

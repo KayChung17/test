@@ -68,6 +68,19 @@ pub fn with_blocked_signals<R>(
 pub(super) fn send_signal_thread_inner(task: &TaskInner, thr: &Thread, sig: SignalInfo) {
     if thr.signal.send_signal(sig) {
         task.interrupt();
+
+        // If the target thread is running on a different CPU, send an IPI
+        // to force that CPU to check for signals and reschedule.
+        // When MAX_CPU_NUM == 1, target_cpu is always == this_cpu (0), so no IPI.
+        if axconfig::plat::MAX_CPU_NUM > 1 {
+            let target_cpu = task.cpu_id() as usize;
+            let this_cpu = axhal::percpu::this_cpu_id();
+            if target_cpu != this_cpu {
+                axhal::irq::send_ipi(axconfig::devices::IPI_IRQ, axhal::irq::IpiTarget::Other {
+                    cpu_id: target_cpu,
+                });
+            }
+        }
     }
 }
 

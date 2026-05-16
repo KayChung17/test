@@ -1,17 +1,23 @@
 use axerrno::{AxError, AxResult};
 use axhal::time::TimeValue;
 use axtask::{
-    AxCpuMask, current,
+    AxCpuMask, current, SCHED_FIFO, SCHED_OTHER, SCHED_RR,
     future::{block_on, interruptible, sleep},
 };
 use linux_raw_sys::general::{
     __kernel_clockid_t, CLOCK_MONOTONIC, CLOCK_REALTIME, PRIO_PGRP, PRIO_PROCESS, PRIO_USER,
-    SCHED_RR, TIMER_ABSTIME, timespec,
+    TIMER_ABSTIME, timespec,
 };
 use starry_vm::{VmMutPtr, VmPtr, vm_load, vm_write_slice};
 
+/// Linux sched_param struct (contains only sched_priority).
+#[repr(C)]
+struct SchedParam {
+    sched_priority: i32,
+}
+
 use crate::{
-    task::{get_process_data, get_process_group},
+    task::{AsThread, get_process_data, get_process_group, get_task},
     time::TimeValueLike,
 };
 
@@ -127,37 +133,108 @@ pub fn sys_sched_setaffinity(
     Ok(0)
 }
 
-pub fn sys_sched_getscheduler(_pid: i32) -> AxResult<isize> {
-    Ok(SCHED_RR as _)
+pub fn sys_sched_getscheduler(pid: i32) -> AxResult<isize> {
+    let task = get_task(pid as _)?;
+    Ok(task.policy() as _)
 }
 
-pub fn sys_sched_setscheduler(_pid: i32, _policy: i32, _param: *const ()) -> AxResult<isize> {
+pub fn sys_sched_setscheduler(pid: i32, policy: i32, param: *const ()) -> AxResult<isize> {
+    let task = get_task(pid as _)?;
+
+    let valid_policy = match policy {
+        SCHED_OTHER | SCHED_FIFO | SCHED_RR => true,
+        _ => false,
+    };
+    if !valid_policy {
+        return Err(AxError::InvalidInput);
+    }
+
+    let sp = unsafe { (param as *const SchedParam).vm_read_uninit()?.assume_init() };
+    let prio = sp.sched_priority;
+
+    if policy == SCHED_OTHER {
+        // SCHED_OTHER: priority must be 0
+        if prio != 0 {
+            return Err(AxError::InvalidInput);
+        }
+        task.set_priority(0);
+        task.set_policy(SCHED_OTHER);
+        axtask::set_priority(0);
+    } else {
+        // SCHED_FIFO or SCHED_RR: priority must be 1..99
+        if prio < 1 || prio > 99 {
+            return Err(AxError::InvalidInput);
+        }
+        task.set_priority(prio as u8);
+        task.set_policy(policy);
+        axtask::set_priority(prio as isize);
+    }
+
     Ok(0)
 }
 
-pub fn sys_sched_getparam(_pid: i32, _param: *mut ()) -> AxResult<isize> {
+pub fn sys_sched_getparam(pid: i32, param: *mut ()) -> AxResult<isize> {
+    let task = get_task(pid as _)?;
+    let sp = SchedParam {
+        sched_priority: task.priority() as i32,
+    };
+    (param as *mut SchedParam).vm_write(sp)?;
     Ok(0)
 }
 
 pub fn sys_getpriority(which: u32, who: u32) -> AxResult<isize> {
     debug!("sys_getpriority <= which: {which}, who: {who}");
 
+    let nice = current().as_thread().proc_data.nice() as isize;
+
     match which {
         PRIO_PROCESS => {
             if who != 0 {
                 let _proc = get_process_data(who)?;
             }
-            Ok(20)
+            Ok(nice)
         }
         PRIO_PGRP => {
             if who != 0 {
                 let _pg = get_process_group(who)?;
             }
-            Ok(20)
+            Ok(nice)
         }
         PRIO_USER => {
             if who == 0 {
-                Ok(20)
+                Ok(nice)
+            } else {
+                Err(AxError::NoSuchProcess)
+            }
+        }
+        _ => Err(AxError::InvalidInput),
+    }
+}
+
+pub fn sys_setpriority(which: u32, who: u32, nice: u32) -> AxResult<isize> {
+    debug!("sys_setpriority <= which: {which}, who: {who}, nice: {nice}");
+
+    let nice_val = nice as i32;
+
+    match which {
+        PRIO_PROCESS => {
+            if who != 0 {
+                let _proc = get_process_data(who)?;
+            }
+            current().as_thread().proc_data.set_nice(nice_val);
+            Ok(0)
+        }
+        PRIO_PGRP => {
+            if who != 0 {
+                let _pg = get_process_group(who)?;
+            }
+            current().as_thread().proc_data.set_nice(nice_val);
+            Ok(0)
+        }
+        PRIO_USER => {
+            if who == 0 {
+                current().as_thread().proc_data.set_nice(nice_val);
+                Ok(0)
             } else {
                 Err(AxError::NoSuchProcess)
             }
