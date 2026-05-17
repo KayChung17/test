@@ -21,9 +21,8 @@ use crate::{
 pub fn init(args: &[String], envs: &[String]) {
     pseudofs::mount_all().expect("Failed to mount pseudofs");
 
-    // Mount extra block devices (e.g. competition test disk at /oscomp)
-    for dev in axfs::take_extra_block_devs() {
-        let fs = axfs::fs::new_default(dev).expect("Failed to init extra filesystem");
+    // Mount extra filesystems (e.g. competition test disk at /oscomp)
+    for fs in axfs::extra_filesystems() {
         let fs_name = fs.name();
         let ctx = axfs::FS_CONTEXT.lock();
         let path = "/oscomp";

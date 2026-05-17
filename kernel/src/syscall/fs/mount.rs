@@ -17,16 +17,21 @@ pub fn sys_mount(
     let fs_type = vm_load_string(fs_type)?;
     debug!("sys_mount <= source: {source:?}, target: {target:?}, fs_type: {fs_type:?}");
 
-    if fs_type != "tmpfs" {
-        return Err(AxError::NoSuchDevice);
+    let target = FS_CONTEXT.lock().resolve(target)?;
+
+    if fs_type == "tmpfs" {
+        let fs = MemoryFs::new();
+        target.mount(&fs)?;
+        return Ok(0);
     }
 
-    let fs = MemoryFs::new();
+    if source.starts_with("/dev/") {
+        let fs = axfs::lookup_extra_filesystem(&source).ok_or(AxError::NoSuchDevice)?;
+        target.mount(&fs)?;
+        return Ok(0);
+    }
 
-    let target = FS_CONTEXT.lock().resolve(target)?;
-    target.mount(&fs)?;
-
-    Ok(0)
+    Err(AxError::NoSuchDevice)
 }
 
 pub fn sys_umount2(target: *const c_char, _flags: i32) -> AxResult<isize> {

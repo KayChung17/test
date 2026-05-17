@@ -27,10 +27,13 @@ ifeq ($(COMPETITION), y)
 endif
 
 default: build
+all: kernel-rv kernel-la disk.img
 
 ROOTFS_URL = https://github.com/Starry-OS/rootfs/releases/download/20260214
 ROOTFS_IMG = rootfs-$(ARCH).img
 TEST_IMG ?= test.img
+RV_ELF_GLOB = *_riscv64-*.elf
+LA_ELF_GLOB = *_loongarch64-*.elf
 
 rootfs:
 	@if [ ! -f $(ROOTFS_IMG) ]; then \
@@ -56,6 +59,30 @@ build run debug disasm: defconfig
 	@$(MAKE) -C make $@ \
 		$(if $(TEST_IMG),TEST_IMG=$(abspath $(TEST_IMG))) \
 		DISK_IMG=$(abspath make/disk.img)
+
+kernel-rv: defconfig
+	@$(MAKE) ARCH=riscv64 COMPETITION=y build LD_SCRIPT=$(abspath configs/linker_riscv64-qemu-virt_eval.lds)
+	@latest=$$(ls -t ./*_riscv64-*.elf 2>/dev/null | head -n 1); \
+	if [ -z "$$latest" ]; then \
+		echo "No RISC-V ELF artifact found"; \
+		exit 1; \
+	fi; \
+	cp "$$latest" $@
+
+kernel-la: defconfig
+	@$(MAKE) ARCH=loongarch64 COMPETITION=y build
+	@latest=$$(ls -t ./*_loongarch64-*.elf 2>/dev/null | head -n 1); \
+	if [ -z "$$latest" ]; then \
+		echo "No LoongArch ELF artifact found"; \
+		exit 1; \
+	fi; \
+	cp "$$latest" $@
+
+disk.img: make/disk.img
+	@cp make/disk.img $@
+
+make/disk.img:
+	@$(MAKE) rootfs
 
 ci-test:
 	./scripts/ci-test.py $(ARCH)

@@ -1,0 +1,2 @@
+[plat]
+kernel-base-vaddr = 0x8020_0000

@@ -53,6 +53,7 @@ default = []
 competition = []
 qemu = [
     "axfeat/defplat",
+    "axfeat/bus-mmio",
     "axfeat/bus-pci",
 
     "axfeat/display",

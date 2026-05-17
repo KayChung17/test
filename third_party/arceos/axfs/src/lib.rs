@@ -13,8 +13,9 @@ extern crate alloc;
 #[macro_use]
 extern crate log;
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use axdriver::{AxBlockDevice, AxDeviceContainer, prelude::*};
+use axfs_ng_vfs::Filesystem;
 use axsync::Mutex;
 use spin::Once;
 
@@ -23,8 +24,8 @@ pub mod fs;
 mod highlevel;
 pub use highlevel::*;
 
-/// Extra block devices stored during init, available for later mounting.
-static EXTRA_BLOCK_DEVS: Once<Mutex<Vec<AxBlockDevice>>> = Once::new();
+/// Extra filesystems built from non-root block devices, available for later mounting.
+static EXTRA_FILESYSTEMS: Once<Mutex<Vec<Filesystem>>> = Once::new();
 
 /// Initializes the filesystem subsystem using the last block device as root.
 ///
@@ -56,18 +57,57 @@ pub fn init_filesystems(mut block_devs: AxDeviceContainer<AxBlockDevice>) {
     let mp = axfs_ng_vfs::Mountpoint::new_root(&fs);
     ROOT_FS_CONTEXT.call_once(|| FsContext::new(mp.root_location()));
 
-    // Store remaining devices for later mounting
-    let extra: Vec<AxBlockDevice> = block_devs.drain(..).collect();
+    // Build filesystems for remaining devices so boot-time mounts and
+    // later mount(2) calls can reuse them.
+    let extra: Vec<Filesystem> = block_devs
+        .drain(..)
+        .map(|dev| fs::new_default(dev).expect("Failed to initialize extra filesystem"))
+        .collect();
     if !extra.is_empty() {
-        EXTRA_BLOCK_DEVS.call_once(|| Mutex::new(extra));
+        EXTRA_FILESYSTEMS.call_once(|| Mutex::new(extra));
     }
 }
 
-/// Takes the extra block devices (those not used as root) for mounting.
-pub fn take_extra_block_devs() -> Vec<AxBlockDevice> {
-    EXTRA_BLOCK_DEVS
+/// Returns clones of all extra filesystems (those not used as root).
+pub fn extra_filesystems() -> Vec<Filesystem> {
+    EXTRA_FILESYSTEMS
         .get()
         .and_then(|m| m.try_lock())
-        .map(|mut v| v.drain(..).collect())
+        .map(|v| v.iter().cloned().collect())
         .unwrap_or_default()
+}
+
+/// Looks up an extra filesystem by a Linux-style block source path.
+pub fn lookup_extra_filesystem(source: &str) -> Option<Filesystem> {
+    let name = source.strip_prefix("/dev/")?;
+    let (disk, _part) = split_linux_disk_name(name)?;
+    let idx = linux_disk_index(disk)?;
+    EXTRA_FILESYSTEMS
+        .get()
+        .and_then(|m| m.try_lock())
+        .and_then(|v| v.get(idx).cloned())
+}
+
+fn split_linux_disk_name(name: &str) -> Option<(&str, Option<&str>)> {
+    let split = name.find(|c: char| c.is_ascii_digit()).unwrap_or(name.len());
+    let (disk, part) = name.split_at(split);
+    if disk.is_empty() {
+        return None;
+    }
+    Some((disk, (!part.is_empty()).then_some(part)))
+}
+
+fn linux_disk_index(name: &str) -> Option<usize> {
+    let suffix = name.strip_prefix("vd")?;
+    if suffix.is_empty() {
+        return None;
+    }
+    let mut idx = 0usize;
+    for ch in suffix.chars() {
+        if !ch.is_ascii_lowercase() {
+            return None;
+        }
+        idx = idx * 26 + (ch as usize - 'a' as usize + 1);
+    }
+    idx.checked_sub(1)
 }

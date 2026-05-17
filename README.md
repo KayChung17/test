@@ -116,6 +116,7 @@ make ARCH=loongarch64 rootfs
 This will download rootfs image from [Starry-OS/rootfs](https://github.com/Starry-OS/rootfs/releases) and set up the disk file for running on QEMU.
 
 #### 双盘模式
+
 启动后自动识别双盘：最后一块作为根 /，其余保留挂载到 /oscomp。
 
 `COMPETITION=y` 模式下，系统默认执行 `src/init_competition.sh`，用于自动挂载评测盘、运行比赛入口并输出统一日志；如需快速定向回归，也可改用 `src/init_competition_focus.sh` 只跑指定测试集。
@@ -150,7 +151,7 @@ make build
 make ARCH=riscv64 build
 make ARCH=loongarch64 build
 ```
-#### 普通运行
+#### 4.1 普通运行
 ```bash
 make run LOG=info # QEMU 启动（查看日志）
 # Run on QEMU (also rebuilds if necessary)
@@ -158,7 +159,7 @@ make ARCH=riscv64 run
 make ARCH=loongarch64 run
 ```
 
-#### 测试运行
+#### 4.2 本地测试运行
 ```
 # Competition mode
 make COMPETITION=y run TEST_IMG=make/test.img
@@ -166,19 +167,46 @@ make COMPETITION=y run TEST_IMG=make/test.img
 
 使用 `src/init_competition.sh` 作为默认入口脚本，启动后将辅助根文件系统挂载到 `/`，并将评测盘挂载到 `/oscomp`。
 
+#### 4.3 官方评测机运行
+
+##### 内核级改动后如何重新生成评测文件
+
+官方评测使用顶层 kernel-rv / kernel-la 作为 ELF 提交产物。
+
+本地默认运行链路与评测链路不完全相同；若修改了内核入口、链接脚本、平台地址布局或比赛模式相关配置，需要重新生成评测专用 ELF，避免继续使用仅适用于本地默认运行方式的旧产物。
+
+常用命令：
+
+```bash
+# 重新生成评测机使用的 RISC-V 内核 ELF
+make kernel-rv
+
+# 重新生成评测机使用的 LoongArch 内核 ELF
+make kernel-la
+
+# 重新生成评测需要的全部提交文件
+make all
+
+# 重新准备辅助根文件系统镜像
+make aux TEST_IMG=./sdcard-rv.img
+```
+
+##### 本地运行autotest评测机
+参考 https://github.com/oscomp/autotest-for-oskernel
+
+1. rv和la评测是分开的，可以基于当前要测试的架构准备 kernel-rv / kernel-la
+2. disk.img、评测盘必须准备
+3. 重新打包 autotest-for-oskernel/kernel.zip
+
 Note:
 
 1. Binary dependencies will be automatically built during `make build`.
 2. You don't have to rerun `build` every time. `run` automatically rebuilds if necessary.
 3. The disk file will **not** be reset between each run. As a result, if you want to switch to another architecture, you must run `make rootfs` with the new architecture before `make run`.
 
-## What next?
+## TODO
 
-You can check out the [GUI guide](./docs/x11.md) to set up a graphical environment, or explore other documentation in this folder.
-
-If you're interested in contributing to the project, please see our [Contributing Guide](./CONTRIBUTING.md).
-
-See more build options in the [Makefile](./Makefile).
+- [ ] 本地缺少la架构官方评测构建链所需的完整的 LoongArch 工具链支持，无法稳定生成可用于官方评测的 kernel-la
 
 ## License
 
