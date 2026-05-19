@@ -23,6 +23,9 @@ use linux_raw_sys::general::{
 use super::{FileLike, Kstat, get_file_like};
 use crate::file::{IoDst, IoSrc};
 
+static NONBLOCK_READ_LOGS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static NONBLOCK_WRITE_LOGS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 pub fn with_fs<R>(dirfd: c_int, f: impl FnOnce(&mut FsContext) -> AxResult<R>) -> AxResult<R> {
     let mut fs = FS_CONTEXT.lock();
     if dirfd == AT_FDCWD {
@@ -167,6 +170,15 @@ impl FileLike for File {
         if likely(self.is_blocking()) {
             inner.read(dst)
         } else {
+            let log_idx = NONBLOCK_READ_LOGS.fetch_add(1, Ordering::Relaxed);
+            if log_idx < 16 || log_idx % 256 == 0 {
+                warn!(
+                    "nonblocking read poll: path={}, nonblocking={}, position={:?}",
+                    self.path(),
+                    self.nonblocking(),
+                    self.position().ok()
+                );
+            }
             block_on(poll_io(self, IoEvents::IN, self.nonblocking(), || {
                 inner.read(&mut *dst)
             }))
@@ -178,6 +190,15 @@ impl FileLike for File {
         if likely(self.is_blocking()) {
             inner.write(src)
         } else {
+            let log_idx = NONBLOCK_WRITE_LOGS.fetch_add(1, Ordering::Relaxed);
+            if log_idx < 16 || log_idx % 256 == 0 {
+                warn!(
+                    "nonblocking write poll: path={}, nonblocking={}, position={:?}",
+                    self.path(),
+                    self.nonblocking(),
+                    self.position().ok()
+                );
+            }
             block_on(poll_io(self, IoEvents::OUT, self.nonblocking(), || {
                 inner.write(&mut *src)
             }))

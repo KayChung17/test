@@ -18,6 +18,7 @@
 *.zip
 *.img
 *.txt
+*.log
 **/target/
 
 .claude/
@@ -28,3 +29,4 @@ tmp/
 
 issue.md
 提交注意事项.md
+测评结果.md

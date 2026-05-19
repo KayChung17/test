@@ -129,14 +129,18 @@ pub fn sys_fallocate(
 pub fn sys_fsync(fd: c_int) -> AxResult<isize> {
     debug!("sys_fsync <= {fd}");
     let f = File::from_fd(fd)?;
+    warn!("fsync enter: fd={}, path={}", fd, f.path());
     f.inner().sync(false)?;
+    warn!("fsync exit: fd={}, path={}, rc=0", fd, f.path());
     Ok(0)
 }
 
 pub fn sys_fdatasync(fd: c_int) -> AxResult<isize> {
     debug!("sys_fdatasync <= {fd}");
     let f = File::from_fd(fd)?;
+    warn!("fdatasync enter: fd={}, path={}", fd, f.path());
     f.inner().sync(true)?;
+    warn!("fdatasync exit: fd={}, path={}, rc=0", fd, f.path());
     Ok(0)
 }
 
@@ -221,7 +225,7 @@ pub fn sys_pwritev2(
     debug!("sys_pwritev2 <= fd: {fd}, iovcnt: {iovcnt}, offset: {offset}, flags: {_flags}");
     let f = File::from_fd(fd)?;
     f.inner()
-        .read_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)
+        .write_at(IoVectorBuf::new(iov, iovcnt)?.into_io(), offset as _)
         .map(|n| n as _)
 }
 

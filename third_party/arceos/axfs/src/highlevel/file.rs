@@ -3,8 +3,9 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
+use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "times")]
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::AtomicU8;
 use core::{num::NonZeroUsize, ops::Range, task::Context};
 
 use axalloc::{UsageKind, global_allocator};
@@ -204,7 +205,11 @@ impl OpenOptions {
             loc.check_is_dir()?;
         }
         if self.truncate {
-            loc.entry().as_file()?.set_len(0)?;
+            if !loc.is_dir() {
+                CachedFile::get_or_create(loc.clone()).truncate()?;
+            } else {
+                loc.entry().as_file()?.set_len(0)?;
+            }
         }
 
         Ok(if loc.is_dir() {
@@ -372,20 +377,33 @@ intrusive_adapter!(EvictListenerAdapter = Box<EvictListener>: EvictListener { li
 struct CachedFileShared {
     page_cache: Mutex<LruCache<u32, PageCache>>,
     evict_listeners: Mutex<LinkedList<EvictListenerAdapter>>,
+    append_lock: RwLock<()>,
+    logical_len: AtomicU64,
+    allocated_len: AtomicU64,
 }
 
+static CACHE_GROW_LOGS: AtomicU64 = AtomicU64::new(0);
+static CACHE_EVICT_LOGS: AtomicU64 = AtomicU64::new(0);
+static CACHE_SYNC_LOGS: AtomicU64 = AtomicU64::new(0);
+
 impl CachedFileShared {
-    pub fn new() -> Self {
+    pub fn new(logical_len: u64) -> Self {
         Self {
-            page_cache: Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap())),
+            page_cache: Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap())),
             evict_listeners: Mutex::new(LinkedList::default()),
+            append_lock: RwLock::new(()),
+            logical_len: AtomicU64::new(logical_len),
+            allocated_len: AtomicU64::new(logical_len),
         }
     }
 
-    pub fn new_unbounded() -> Self {
+    pub fn new_unbounded(logical_len: u64) -> Self {
         Self {
             page_cache: Mutex::new(LruCache::unbounded()),
             evict_listeners: Mutex::new(LinkedList::default()),
+            append_lock: RwLock::new(()),
+            logical_len: AtomicU64::new(logical_len),
+            allocated_len: AtomicU64::new(logical_len),
         }
     }
 }
@@ -395,9 +413,6 @@ pub struct CachedFile {
     inner: Location,
     shared: Arc<CachedFileShared>,
     in_memory: bool,
-    /// Only one thread can append to the file at a time, while multiple writers
-    /// are permitted.
-    append_lock: RwLock<()>,
 }
 
 impl Clone for CachedFile {
@@ -406,7 +421,6 @@ impl Clone for CachedFile {
             inner: self.inner.clone(),
             shared: self.shared.clone(),
             in_memory: self.in_memory,
-            append_lock: RwLock::new(()),
         }
     }
 }
@@ -434,11 +448,12 @@ impl CachedFile {
         let shared = if let Some(shared) = guard.get::<FileUserData>().and_then(|it| it.get()) {
             shared
         } else {
+            let logical_len = location.len().unwrap_or_default();
             let (shared, user_data) = if in_memory {
-                let shared = Arc::new(CachedFileShared::new_unbounded());
+                let shared = Arc::new(CachedFileShared::new_unbounded(logical_len));
                 (shared.clone(), FileUserData::Strong(shared))
             } else {
-                let shared = Arc::new(CachedFileShared::new());
+                let shared = Arc::new(CachedFileShared::new(logical_len));
                 let user_data = FileUserData::Weak(Arc::downgrade(&shared));
                 (shared, user_data)
             };
@@ -451,13 +466,52 @@ impl CachedFile {
             inner: location,
             shared,
             in_memory,
-            append_lock: RwLock::new(()),
         }
     }
 
     /// Returns `true` if both handles refer to the same shared state.
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)
+    }
+
+    pub fn set_len(&self, len: u64) -> VfsResult<()> {
+        let file = self.inner.entry().as_file()?;
+        let old_len = self.shared.logical_len.swap(len, Ordering::AcqRel);
+        self.shared.allocated_len.store(len, Ordering::Release);
+        file.set_len(len)?;
+
+        let old_last_page = (old_len / PAGE_SIZE as u64) as u32;
+        let new_last_page = (len / PAGE_SIZE as u64) as u32;
+        if old_len < len {
+            let mut guard = self.shared.page_cache.lock();
+            if let Some(page) = guard.get_mut(&old_last_page) {
+                let page_start = old_last_page as u64 * PAGE_SIZE as u64;
+                let old_page_offset = (old_len - page_start) as usize;
+                let new_page_offset = (len - page_start).min(PAGE_SIZE as u64) as usize;
+                page.data()[old_page_offset..new_page_offset].fill(0);
+            }
+        } else if old_last_page > new_last_page {
+            let mut guard = self.shared.page_cache.lock();
+            let keys = guard
+                .iter()
+                .map(|(k, _)| *k)
+                .filter(|it| *it > new_last_page)
+                .collect::<Vec<_>>();
+            for pn in keys {
+                if let Some(mut page) = guard.pop(&pn)
+                    && !self.in_memory
+                {
+                    page.dirty = false;
+                    self.evict_cache(file, pn, &mut page)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn truncate(&self) -> VfsResult<()> {
+        self.shared.page_cache.lock().clear();
+        self.set_len(0)
     }
 
     /// Returns `true` if this file is backed by an in-memory filesystem (e.g. tmpfs).
@@ -498,7 +552,8 @@ impl CachedFile {
         }
         if page.dirty {
             let page_start = pn as u64 * PAGE_SIZE as u64;
-            let len = (file.len()?.saturating_sub(page_start)).min(PAGE_SIZE as u64) as usize;
+            let len = (self.shared.logical_len.load(Ordering::Acquire).saturating_sub(page_start))
+                .min(PAGE_SIZE as u64) as usize;
             if len > 0 {
                 file.write_at(&page.data()[..len], page_start)?;
             }
@@ -521,18 +576,38 @@ impl CachedFile {
         let mut evicted = None;
         if cache.len() == cache.cap().get() {
             // Cache is full, remove the least recently used page
-            if let Some((pn, mut page)) = cache.pop_lru() {
-                self.evict_cache(file, pn, &mut page)?;
-                evicted = Some((pn, page));
+            if let Some((evicted_pn, mut page)) = cache.pop_lru() {
+                let log_idx = CACHE_EVICT_LOGS.fetch_add(1, Ordering::Relaxed);
+                if log_idx < 16 || log_idx % 256 == 0 {
+                    warn!(
+                        "cached-file eviction: path={}, incoming_pn={}, evicted_pn={}, dirty={}, cache_len={}, cache_cap={}",
+                        self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
+                        pn,
+                        evicted_pn,
+                        page.dirty,
+                        cache.len(),
+                        cache.cap().get()
+                    );
+                }
+                self.evict_cache(file, evicted_pn, &mut page)?;
+                evicted = Some((evicted_pn, page));
             }
         }
 
         // Page not in cache, read it
         let mut page = PageCache::new()?;
-        if self.in_memory {
-            page.data().fill(0);
-        } else {
-            file.read_at(page.data(), pn as u64 * PAGE_SIZE as u64)?;
+        page.data().fill(0);
+        if !self.in_memory {
+            let page_start = pn as u64 * PAGE_SIZE as u64;
+            let len = self
+                .shared
+                .logical_len
+                .load(Ordering::Acquire)
+                .saturating_sub(page_start)
+                .min(PAGE_SIZE as u64) as usize;
+            if len > 0 {
+                file.read_at(&mut page.data()[..len], page_start)?;
+            }
         }
         cache.put(pn, page);
         Ok((cache.get_mut(&pn).unwrap(), evicted))
@@ -587,7 +662,7 @@ impl CachedFile {
 
     /// Reads data from the file at `offset` into `dst`.
     pub fn read_at(&self, mut dst: impl Write + IoBufMut, offset: u64) -> VfsResult<usize> {
-        let len = self.inner.len()?;
+        let len = self.shared.logical_len.load(Ordering::Acquire);
         let end = (offset + dst.remaining_mut() as u64).min(len);
         if end <= offset {
             return Ok(0);
@@ -605,14 +680,37 @@ impl CachedFile {
 
     fn write_at_locked(&self, mut buf: impl Read + IoBuf, offset: u64) -> VfsResult<usize> {
         let end = offset + buf.remaining() as u64;
+        let allocated_len = self.shared.allocated_len.load(Ordering::Acquire);
+        if end > allocated_len {
+            let grow_to = end.div_ceil(PAGE_SIZE as u64) * PAGE_SIZE as u64;
+            let log_idx = CACHE_GROW_LOGS.fetch_add(1, Ordering::Relaxed);
+            if log_idx < 32 || log_idx % 256 == 0 {
+                warn!(
+                    "cached-file grow: path={}, offset={}, end={}, allocated_len={}, grow_to={}, logical_len={}",
+                    self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
+                    offset,
+                    end,
+                    allocated_len,
+                    grow_to,
+                    self.shared.logical_len.load(Ordering::Acquire)
+                );
+            }
+            self.shared.allocated_len.store(grow_to, Ordering::Release);
+        }
+        let log_idx = CACHE_GROW_LOGS.fetch_add(1, Ordering::Relaxed);
+        if log_idx < 32 || log_idx % 512 == 0 {
+            warn!(
+                "cached-file write_at: path={}, offset={}, end={}, logical_len={}, allocated_len={}",
+                self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
+                offset,
+                end,
+                self.shared.logical_len.load(Ordering::Acquire),
+                self.shared.allocated_len.load(Ordering::Acquire),
+            );
+        }
         self.with_pages(
             offset..end,
-            |file| {
-                if end > file.len()? {
-                    file.set_len(end)?;
-                }
-                Ok(0)
-            },
+            |_| Ok(0),
             |written, page, range| {
                 let len = range.end - range.start;
                 buf.read(&mut page.data()[range.start..range.end])?;
@@ -621,73 +719,64 @@ impl CachedFile {
                 }
                 Ok(written + len)
             },
-        )
+        )?;
+        self.shared.logical_len.fetch_max(end, Ordering::AcqRel);
+        Ok((end - offset) as usize)
     }
 
     /// Writes `buf` to the file at `offset`.
     pub fn write_at(&self, buf: impl Read + IoBuf, offset: u64) -> VfsResult<usize> {
-        let _guard = self.append_lock.read();
+        let _guard = self.shared.append_lock.read();
         self.write_at_locked(buf, offset)
     }
 
     /// Appends `buf` to the end of the file. Returns `(bytes_written, new_end)`.
     pub fn append(&self, buf: impl Read + IoBuf) -> VfsResult<(usize, u64)> {
-        let _guard = self.append_lock.write();
-        let file = self.inner.entry().as_file()?;
-        let len = file.len()?;
+        let _guard = self.shared.append_lock.write();
+        let len = self.shared.logical_len.load(Ordering::Acquire);
         self.write_at_locked(buf, len)
             .map(|written| (written, len + written as u64))
     }
 
-    /// Truncates or extends the file to `len` bytes.
-    pub fn set_len(&self, len: u64) -> VfsResult<()> {
-        let file = self.inner.entry().as_file()?;
-        let old_len = file.len()?;
-        file.set_len(len)?;
-
-        let old_last_page = (old_len / PAGE_SIZE as u64) as u32;
-        let new_last_page = (len / PAGE_SIZE as u64) as u32;
-        if old_len < len {
-            let mut guard = self.shared.page_cache.lock();
-            if let Some(page) = guard.get_mut(&old_last_page) {
-                let page_start = old_last_page as u64 * PAGE_SIZE as u64;
-                let old_page_offset = (old_len - page_start) as usize;
-                let new_page_offset = (len - page_start).min(PAGE_SIZE as u64) as usize;
-                page.data()[old_page_offset..new_page_offset].fill(0);
-            }
-        } else if old_last_page > new_last_page {
-            // For truncating, we need to remove all pages that are beyond the
-            // new length
-            // TODO(mivik): can this be more efficient?
-            let mut guard = self.shared.page_cache.lock();
-            let keys = guard
-                .iter()
-                .map(|(k, _)| *k)
-                .filter(|it| *it > new_last_page)
-                .collect::<Vec<_>>();
-            for pn in keys {
-                if let Some(mut page) = guard.pop(&pn)
-                    && !self.in_memory
-                {
-                    // Don't write back pages since they're discarded
-                    page.dirty = false;
-                    self.evict_cache(file, pn, &mut page)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Flushes all cached pages back to disk.
-    pub fn sync(&self, data_only: bool) -> VfsResult<()> {
+    pub fn sync(&self, data_only: bool, source: &'static str) -> VfsResult<()> {
         if self.in_memory {
             return Ok(());
         }
         let file = self.inner.entry().as_file()?;
+        let logical_len = self.shared.logical_len.load(Ordering::Acquire);
         let mut guard = self.shared.page_cache.lock();
-        while let Some((pn, mut page)) = guard.pop_lru() {
-            self.evict_cache(file, pn, &mut page)?;
+        let dirty_pages = guard
+            .iter()
+            .filter(|(_, page)| page.dirty)
+            .map(|(pn, _)| *pn)
+            .collect::<Vec<_>>();
+        let mut flushed_pages = 0usize;
+        for pn in dirty_pages {
+            if let Some(page) = guard.get_mut(&pn) {
+                flushed_pages += 1;
+                let page_start = pn as u64 * PAGE_SIZE as u64;
+                let len = (self.shared.logical_len.load(Ordering::Acquire).saturating_sub(page_start))
+                    .min(PAGE_SIZE as u64) as usize;
+                if len > 0 {
+                    file.write_at(&page.data()[..len], page_start)?;
+                }
+                page.dirty = false;
+            }
         }
+        let log_idx = CACHE_SYNC_LOGS.fetch_add(1, Ordering::Relaxed);
+        if flushed_pages > 0 || log_idx < 8 {
+            warn!(
+                "cached-file sync: source={}, path={}, data_only={}, flushed_pages={}, logical_len={}, allocated_len={}",
+                source,
+                self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
+                data_only,
+                flushed_pages,
+                logical_len,
+                self.shared.allocated_len.load(Ordering::Acquire)
+            );
+        }
+        file.set_len(logical_len)?;
         file.sync(data_only)?;
         Ok(())
     }
@@ -705,7 +794,9 @@ impl Drop for CachedFile {
             // need to drop it.
             return;
         }
-        if let Err(err) = self.sync(false) {
+        if self.shared.page_cache.lock().iter().any(|(_, page)| page.dirty)
+            && let Err(err) = self.sync(false, "drop")
+        {
             warn!("Failed to sync file on drop: {err:?}");
         }
     }
@@ -782,9 +873,9 @@ impl FileBackend {
     }
 
     /// Flushes cached data (and optionally metadata) to disk.
-    pub fn sync(&self, data_only: bool) -> VfsResult<()> {
+    pub fn sync(&self, data_only: bool, source: &'static str) -> VfsResult<()> {
         match self {
-            Self::Cached(cached) => cached.sync(data_only),
+            Self::Cached(cached) => cached.sync(data_only, source),
             Self::Direct(loc) => loc.entry().as_file()?.sync(data_only),
         }
     }
@@ -893,7 +984,7 @@ impl File {
     /// metadata.
     pub fn sync(&self, data_only: bool) -> VfsResult<()> {
         self.access(FileFlags::empty())?;
-        self.inner.sync(data_only)
+        self.inner.sync(data_only, "syscall")
     }
 
     /// Reads data from the current position, advancing the cursor.

@@ -410,7 +410,6 @@ impl<G: BaseGuard> CurrentRunQueueRef<'_, G> {
         // Note that the state may have been set as `Ready` in `unblock_task()`,
         // see `unblock_task()` for details.
 
-        debug!("task block: {}", curr.id_name());
         self.inner.resched();
     }
 
@@ -514,11 +513,6 @@ impl AxRunQueue {
         assert!(
             !axhal::asm::irqs_enabled(),
             "IRQs must be disabled during scheduling"
-        );
-        trace!(
-            "context switch: {} -> {}",
-            prev_task.id_name(),
-            next_task.id_name()
         );
         #[cfg(feature = "preempt")]
         next_task.set_preempt_pending(false);

@@ -182,12 +182,12 @@ impl<T, const N_PRIO: usize, const MAX_TIME_SLICE: usize> BaseScheduler
         let prio = prev.priority() as usize;
         let policy = prev.policy();
 
-        if policy == SCHED_RR && prev.time_slice() > 0 && preempt {
-            // SCHED_RR was preempted but still has time slice: put at front
+        if (policy == SCHED_RR || policy == SCHED_OTHER) && prev.time_slice() > 0 && preempt {
+            // SCHED_RR / SCHED_OTHER was preempted but still has time slice: put at front
             self.ready_queues[prio].push_front(prev);
         } else {
             // Reset time slice for next round
-            if policy == SCHED_RR {
+            if policy == SCHED_RR || policy == SCHED_OTHER {
                 prev.reset_time_slice(MAX_TIME_SLICE as isize);
             }
             self.ready_queues[prio].push_back(prev);
@@ -215,7 +215,12 @@ impl<T, const N_PRIO: usize, const MAX_TIME_SLICE: usize> BaseScheduler
                 self.highest_prio().is_some_and(|p| p > curr_prio)
             }
             _ => {
-                // SCHED_OTHER: always preemptible by RT tasks
+                let old = current.dec_time_slice();
+                if old <= 1 {
+                    // SCHED_OTHER time slice exhausted, re-schedule.
+                    return true;
+                }
+                // SCHED_OTHER is also preemptible by RT tasks.
                 self.highest_prio().is_some_and(|p| p > 0)
             }
         }

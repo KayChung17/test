@@ -22,6 +22,11 @@ ln -sf "$GLIBC_LIB/libm.so.6" /lib/
 
 cd "$TEST_DIR"
 
+# Avoid pager pauses during verbose test output.
+stty rows 1000 cols 200 >/dev/null 2>&1 || true
+export PAGER=cat
+export TERM=dumb
+
 # ---- scan for test entry points ----
 SCRIPTS=$(ls *_testcode.sh 2>/dev/null | sort)
 

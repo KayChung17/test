@@ -495,6 +495,7 @@ pub fn sys_fcntl(fd: c_int, cmd: c_int, arg: usize) -> AxResult<isize> {
                     if cmd as u32 == F_SETLK {
                         return Err(AxError::from(LinuxError::EAGAIN));
                     }
+                    axtask::yield_now();
                     continue;
                 }
                 return Ok(0);
