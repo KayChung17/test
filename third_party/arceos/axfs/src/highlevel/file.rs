@@ -1,6 +1,8 @@
 use alloc::{
     boxed::Box,
+    collections::BTreeMap,
     sync::{Arc, Weak},
+    vec,
     vec::Vec,
 };
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -18,7 +20,7 @@ use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
 use intrusive_collections::{LinkedList, LinkedListAtomicLink, intrusive_adapter};
 use lru::LruCache;
-use spin::RwLock;
+use spin::{Lazy, RwLock};
 
 use super::FsContext;
 
@@ -376,6 +378,7 @@ intrusive_adapter!(EvictListenerAdapter = Box<EvictListener>: EvictListener { li
 
 struct CachedFileShared {
     page_cache: Mutex<LruCache<u32, PageCache>>,
+    dirty_evicted: Mutex<BTreeMap<u32, Box<[u8]>>>,
     evict_listeners: Mutex<LinkedList<EvictListenerAdapter>>,
     append_lock: RwLock<()>,
     logical_len: AtomicU64,
@@ -390,6 +393,7 @@ impl CachedFileShared {
     pub fn new(logical_len: u64) -> Self {
         Self {
             page_cache: Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap())),
+            dirty_evicted: Mutex::new(BTreeMap::new()),
             evict_listeners: Mutex::new(LinkedList::default()),
             append_lock: RwLock::new(()),
             logical_len: AtomicU64::new(logical_len),
@@ -400,6 +404,7 @@ impl CachedFileShared {
     pub fn new_unbounded(logical_len: u64) -> Self {
         Self {
             page_cache: Mutex::new(LruCache::unbounded()),
+            dirty_evicted: Mutex::new(BTreeMap::new()),
             evict_listeners: Mutex::new(LinkedList::default()),
             append_lock: RwLock::new(()),
             logical_len: AtomicU64::new(logical_len),
@@ -425,42 +430,38 @@ impl Clone for CachedFile {
     }
 }
 
-enum FileUserData {
-    Weak(Weak<CachedFileShared>),
-    Strong(Arc<CachedFileShared>),
-}
-
-impl FileUserData {
-    pub fn get(&self) -> Option<Arc<CachedFileShared>> {
-        match self {
-            FileUserData::Weak(weak) => weak.upgrade(),
-            FileUserData::Strong(strong) => Some(strong.clone()),
-        }
-    }
-}
+static CACHED_FILE_TABLE: Lazy<RwLock<BTreeMap<(u64, u64), Weak<CachedFileShared>>>> =
+    Lazy::new(|| RwLock::new(BTreeMap::new()));
 
 impl CachedFile {
     /// Returns an existing cached file for `location`, or creates a new one.
     pub fn get_or_create(location: Location) -> Self {
         let in_memory = location.filesystem().name() == "tmpfs";
 
-        let mut guard = location.user_data();
-        let shared = if let Some(shared) = guard.get::<FileUserData>().and_then(|it| it.get()) {
-            shared
-        } else {
-            let logical_len = location.len().unwrap_or_default();
-            let (shared, user_data) = if in_memory {
-                let shared = Arc::new(CachedFileShared::new_unbounded(logical_len));
-                (shared.clone(), FileUserData::Strong(shared))
+        let shared = if in_memory {
+            let mut guard = location.user_data();
+            if let Some(shared) = guard.get::<CachedFileShared>() {
+                shared
             } else {
-                let shared = Arc::new(CachedFileShared::new(logical_len));
-                let user_data = FileUserData::Weak(Arc::downgrade(&shared));
-                (shared, user_data)
-            };
-            guard.insert(user_data);
-            shared
+                let shared = Arc::new(CachedFileShared::new_unbounded(location.len().unwrap_or_default()));
+                guard.insert(CachedFileShared::new_unbounded(location.len().unwrap_or_default()));
+                guard.get::<CachedFileShared>().unwrap()
+            }
+        } else {
+            let key = (location.metadata().map(|m| m.device).unwrap_or(0), location.inode());
+            if let Some(shared) = CACHED_FILE_TABLE.read().get(&key).and_then(Weak::upgrade) {
+                shared
+            } else {
+                let mut table = CACHED_FILE_TABLE.write();
+                if let Some(shared) = table.get(&key).and_then(Weak::upgrade) {
+                    shared
+                } else {
+                    let shared = Arc::new(CachedFileShared::new(location.len().unwrap_or_default()));
+                    table.insert(key, Arc::downgrade(&shared));
+                    shared
+                }
+            }
         };
-        drop(guard);
 
         Self {
             inner: location,
@@ -482,6 +483,7 @@ impl CachedFile {
 
         let old_last_page = (old_len / PAGE_SIZE as u64) as u32;
         let new_last_page = (len / PAGE_SIZE as u64) as u32;
+        let new_page_offset = (len % PAGE_SIZE as u64) as usize;
         if old_len < len {
             let mut guard = self.shared.page_cache.lock();
             if let Some(page) = guard.get_mut(&old_last_page) {
@@ -490,19 +492,49 @@ impl CachedFile {
                 let new_page_offset = (len - page_start).min(PAGE_SIZE as u64) as usize;
                 page.data()[old_page_offset..new_page_offset].fill(0);
             }
-        } else if old_last_page > new_last_page {
+        } else if old_len > len {
+            {
+                let mut dirty_evicted = self.shared.dirty_evicted.lock();
+                if len == 0 {
+                    dirty_evicted.clear();
+                } else {
+                    if let Some(snapshot) = dirty_evicted.get_mut(&new_last_page) {
+                        let start = new_page_offset.min(snapshot.len());
+                        snapshot[start..].fill(0);
+                    }
+                    dirty_evicted.retain(|pn, _| *pn < new_last_page || *pn == new_last_page);
+                }
+            }
             let mut guard = self.shared.page_cache.lock();
-            let keys = guard
-                .iter()
-                .map(|(k, _)| *k)
-                .filter(|it| *it > new_last_page)
-                .collect::<Vec<_>>();
-            for pn in keys {
-                if let Some(mut page) = guard.pop(&pn)
-                    && !self.in_memory
-                {
-                    page.dirty = false;
-                    self.evict_cache(file, pn, &mut page)?;
+            if len == 0 {
+                let keys = guard.iter().map(|(k, _)| *k).collect::<Vec<_>>();
+                for pn in keys {
+                    if let Some(mut page) = guard.pop(&pn)
+                        && !self.in_memory
+                    {
+                        page.data().fill(0);
+                        page.dirty = false;
+                        self.evict_cache(file, pn, &mut page)?;
+                    }
+                }
+            } else {
+                if let Some(page) = guard.get_mut(&new_last_page) {
+                    page.data()[new_page_offset..].fill(0);
+                    page.dirty = true;
+                }
+                let keys = guard
+                    .iter()
+                    .map(|(k, _)| *k)
+                    .filter(|it| *it > new_last_page)
+                    .collect::<Vec<_>>();
+                for pn in keys {
+                    if let Some(mut page) = guard.pop(&pn)
+                        && !self.in_memory
+                    {
+                        page.data().fill(0);
+                        page.dirty = false;
+                        self.evict_cache(file, pn, &mut page)?;
+                    }
                 }
             }
         }
@@ -510,7 +542,6 @@ impl CachedFile {
     }
 
     pub fn truncate(&self) -> VfsResult<()> {
-        self.shared.page_cache.lock().clear();
         self.set_len(0)
     }
 
@@ -555,7 +586,21 @@ impl CachedFile {
             let len = (self.shared.logical_len.load(Ordering::Acquire).saturating_sub(page_start))
                 .min(PAGE_SIZE as u64) as usize;
             if len > 0 {
-                file.write_at(&page.data()[..len], page_start)?;
+                let mut snapshot = vec![0; len].into_boxed_slice();
+                snapshot.copy_from_slice(&page.data()[..len]);
+                let mut dirty_evicted = self.shared.dirty_evicted.lock();
+                dirty_evicted.insert(pn, snapshot);
+                let log_idx = CACHE_EVICT_LOGS.fetch_add(1, Ordering::Relaxed);
+                if log_idx < 16 || log_idx % 256 == 0 {
+                    warn!(
+                        "cached-file dirty snapshot: path={}, pn={}, dirty_evicted_count={}",
+                        self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
+                        pn,
+                        dirty_evicted.len()
+                    );
+                }
+            } else if !self.in_memory {
+                file.write_at(&[], page_start)?;
             }
             page.dirty = false;
         }
@@ -594,7 +639,7 @@ impl CachedFile {
             }
         }
 
-        // Page not in cache, read it
+        // Page not in cache, refill it from deferred snapshot or disk.
         let mut page = PageCache::new()?;
         page.data().fill(0);
         if !self.in_memory {
@@ -606,7 +651,28 @@ impl CachedFile {
                 .saturating_sub(page_start)
                 .min(PAGE_SIZE as u64) as usize;
             if len > 0 {
-                file.read_at(&mut page.data()[..len], page_start)?;
+                if let Some(snapshot) = self.shared.dirty_evicted.lock().remove(&pn) {
+                    page.data()[..snapshot.len()].copy_from_slice(&snapshot);
+                    page.dirty = true;
+                    let log_idx = CACHE_EVICT_LOGS.fetch_add(1, Ordering::Relaxed);
+                    if log_idx < 16 || log_idx % 256 == 0 {
+                        warn!(
+                            "cached-file refill: path={}, pn={}, source=snapshot",
+                            self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
+                            pn
+                        );
+                    }
+                } else {
+                    file.read_at(&mut page.data()[..len], page_start)?;
+                    let log_idx = CACHE_EVICT_LOGS.fetch_add(1, Ordering::Relaxed);
+                    if log_idx < 16 || log_idx % 256 == 0 {
+                        warn!(
+                            "cached-file refill: path={}, pn={}, source=disk",
+                            self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
+                            pn
+                        );
+                    }
+                }
             }
         }
         cache.put(pn, page);
@@ -764,14 +830,35 @@ impl CachedFile {
                 page.dirty = false;
             }
         }
+        drop(guard);
+        let evicted_pages = {
+            let dirty_evicted = self.shared.dirty_evicted.lock();
+            dirty_evicted
+                .iter()
+                .map(|(pn, snapshot)| (*pn, snapshot.clone()))
+                .collect::<Vec<_>>()
+        };
+        for (pn, snapshot) in &evicted_pages {
+            let page_start = *pn as u64 * PAGE_SIZE as u64;
+            if !snapshot.is_empty() {
+                file.write_at(&snapshot[..], page_start)?;
+            }
+        }
+        if !evicted_pages.is_empty() {
+            let mut dirty_evicted = self.shared.dirty_evicted.lock();
+            for (pn, _) in &evicted_pages {
+                dirty_evicted.remove(pn);
+            }
+        }
         let log_idx = CACHE_SYNC_LOGS.fetch_add(1, Ordering::Relaxed);
-        if flushed_pages > 0 || log_idx < 8 {
+        if flushed_pages > 0 || !evicted_pages.is_empty() || log_idx < 8 {
             warn!(
-                "cached-file sync: source={}, path={}, data_only={}, flushed_pages={}, logical_len={}, allocated_len={}",
+                "cached-file sync: source={}, path={}, data_only={}, flushed_pages={}, evicted_dirty_pages={}, logical_len={}, allocated_len={}",
                 source,
                 self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
                 data_only,
                 flushed_pages,
+                evicted_pages.len(),
                 logical_len,
                 self.shared.allocated_len.load(Ordering::Acquire)
             );
@@ -794,7 +881,9 @@ impl Drop for CachedFile {
             // need to drop it.
             return;
         }
-        if self.shared.page_cache.lock().iter().any(|(_, page)| page.dirty)
+        let has_dirty_cache = self.shared.page_cache.lock().iter().any(|(_, page)| page.dirty);
+        let has_dirty_evicted = !self.shared.dirty_evicted.lock().is_empty();
+        if (has_dirty_cache || has_dirty_evicted)
             && let Err(err) = self.sync(false, "drop")
         {
             warn!("Failed to sync file on drop: {err:?}");

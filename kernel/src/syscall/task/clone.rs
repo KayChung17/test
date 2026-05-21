@@ -177,8 +177,9 @@ impl CloneArgs {
 
         let curr = current();
         let old_proc_data = &curr.as_thread().proc_data;
+        let task_name = curr.name();
 
-        let mut new_task = new_user_task(&curr.name(), new_uctx, set_child_tid);
+        let mut new_task = new_user_task(&task_name, new_uctx, set_child_tid);
 
         let tid = new_task.id().as_u64() as Pid;
         if flags.contains(CloneFlags::PARENT_SETTID) && parent_tid != 0 {

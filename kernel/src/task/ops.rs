@@ -3,7 +3,6 @@ use alloc::{
     vec::Vec,
 };
 use core::{ffi::c_long, sync::atomic::Ordering};
-
 use axerrno::{AxError, AxResult};
 use axtask::{AxTaskRef, TaskInner, WeakAxTaskRef, current};
 use bytemuck::AnyBitPattern;
@@ -204,11 +203,11 @@ pub fn do_exit(exit_code: i32, group_exit: bool) {
     info!("{} exit with code: {}", curr.id_name(), exit_code);
 
     let clear_child_tid = thr.clear_child_tid() as *mut u32;
-    if clear_child_tid.vm_write(0).is_ok() {
+    let clear_child_tid_written = clear_child_tid.vm_write(0).is_ok();
+    if clear_child_tid_written {
         let key = FutexKey::new_current(clear_child_tid as usize);
         let table = futex_table_for(&key);
-        let guard = table.get(&key);
-        if let Some(futex) = guard {
+        if let Some(futex) = table.get(&key) {
             futex.wq.wake(1, u32::MAX);
         }
         axtask::yield_now();

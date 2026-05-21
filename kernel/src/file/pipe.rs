@@ -216,7 +216,7 @@ impl Pollable for Pipe {
         let mut events = IoEvents::empty();
         let buf = self.shared.buffer.lock();
         if self.read_side {
-            events.set(IoEvents::IN, buf.occupied_len() > 0);
+            events.set(IoEvents::IN, buf.occupied_len() > 0 || self.closed());
             events.set(IoEvents::HUP, self.closed());
         } else {
             events.set(IoEvents::OUT, buf.vacant_len() > 0);

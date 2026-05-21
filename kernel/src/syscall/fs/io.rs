@@ -3,7 +3,6 @@ use core::{
     ffi::{c_char, c_int},
     task::Context,
 };
-
 use axerrno::{AxError, AxResult};
 use axfs::{FS_CONTEXT, FileFlags, OpenOptions};
 use axio::{Seek, SeekFrom};
@@ -128,10 +127,7 @@ pub fn sys_fallocate(
 
 pub fn sys_fsync(fd: c_int) -> AxResult<isize> {
     debug!("sys_fsync <= {fd}");
-    let f = File::from_fd(fd)?;
-    warn!("fsync enter: fd={}, path={}", fd, f.path());
-    f.inner().sync(false)?;
-    warn!("fsync exit: fd={}, path={}, rc=0", fd, f.path());
+    File::from_fd(fd)?.inner().sync(false)?;
     Ok(0)
 }
 
