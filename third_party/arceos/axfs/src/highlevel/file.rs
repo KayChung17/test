@@ -538,6 +538,7 @@ impl CachedFile {
     }
 
     pub fn truncate(&self) -> VfsResult<()> {
+        self.shared.page_cache.lock().clear();
         self.set_len(0)
     }
 

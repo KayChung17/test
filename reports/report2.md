@@ -183,3 +183,35 @@ LTP 在进入 cgroup 相关用例前，挂载 V1/V2 cgroup 时直接返回 `ENOD
 - 输出已经再次清理干净，没有保留本轮临时诊断日志。
 
 也就是说，这一轮完成的是“新卡点的基础打通 + 调试输出收尾”；如果后续 cgroup 相关测试还存在失败，接下来面对的就会是更真实的功能缺口，而不再是环境或入口问题。
+
+### 补充结论：file system latency 回退与最终修正
+
+在清掉本轮调试日志之后，测试一度再次在：
+
+- `file system latency`
+
+后面长时间静默，没有像之前通过版本那样很快继续打印：
+
+- `Bandwidth measurements`
+- `Pipe bandwidth: 202.61 MB/sec`
+
+后续对比基线和当前实现后确认，这不是“去掉日志导致看不见进度”，而是真实回退。
+
+进一步收敛后，最关键的问题落在：
+
+- `third_party/arceos/axfs/src/highlevel/file.rs`
+
+本轮为了支持延迟写回，`CachedFile` 新增了 `dirty_evicted` 和更长寿命的共享缓存状态；在这个前提下，`truncate()` 被改成了直接 `set_len(0)`，不再像基线那样先清空 `page_cache`。
+
+这会导致 truncate 之后旧缓存状态继续残留，并与新的文件长度/后续访问生命周期叠加，最终在 `file system latency` 相关 workload 中再次积累出长静默。
+
+最终修正是把 `truncate()` 恢复为更接近基线的行为：
+
+- 先清空 `page_cache`
+- 再执行 `set_len(0)`
+
+修正后，测试重新通过，说明：
+
+- 延迟写回本身并不是这次回退的直接根因；
+- 真正的问题是“延迟写回 + truncate 生命周期处理不当”的组合；
+- 原始大卡点已经被前一轮方案打掉，这一轮进一步把问题收敛到了 `truncate()` 这一处边界语义。
