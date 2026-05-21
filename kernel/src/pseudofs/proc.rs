@@ -377,6 +377,8 @@ fn builder(fs: Arc<SimpleFs>) -> DirMaker {
                 nodev	proc
                 nodev	devfs
                 nodev	tmpfs
+                nodev	cgroup
+                nodev	cgroup2
             "})
         }),
     );

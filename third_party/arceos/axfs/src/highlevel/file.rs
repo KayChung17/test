@@ -385,10 +385,6 @@ struct CachedFileShared {
     allocated_len: AtomicU64,
 }
 
-static CACHE_GROW_LOGS: AtomicU64 = AtomicU64::new(0);
-static CACHE_EVICT_LOGS: AtomicU64 = AtomicU64::new(0);
-static CACHE_SYNC_LOGS: AtomicU64 = AtomicU64::new(0);
-
 impl CachedFileShared {
     pub fn new(logical_len: u64) -> Self {
         Self {
@@ -588,17 +584,7 @@ impl CachedFile {
             if len > 0 {
                 let mut snapshot = vec![0; len].into_boxed_slice();
                 snapshot.copy_from_slice(&page.data()[..len]);
-                let mut dirty_evicted = self.shared.dirty_evicted.lock();
-                dirty_evicted.insert(pn, snapshot);
-                let log_idx = CACHE_EVICT_LOGS.fetch_add(1, Ordering::Relaxed);
-                if log_idx < 16 || log_idx % 256 == 0 {
-                    warn!(
-                        "cached-file dirty snapshot: path={}, pn={}, dirty_evicted_count={}",
-                        self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
-                        pn,
-                        dirty_evicted.len()
-                    );
-                }
+                self.shared.dirty_evicted.lock().insert(pn, snapshot);
             } else if !self.in_memory {
                 file.write_at(&[], page_start)?;
             }
@@ -622,18 +608,6 @@ impl CachedFile {
         if cache.len() == cache.cap().get() {
             // Cache is full, remove the least recently used page
             if let Some((evicted_pn, mut page)) = cache.pop_lru() {
-                let log_idx = CACHE_EVICT_LOGS.fetch_add(1, Ordering::Relaxed);
-                if log_idx < 16 || log_idx % 256 == 0 {
-                    warn!(
-                        "cached-file eviction: path={}, incoming_pn={}, evicted_pn={}, dirty={}, cache_len={}, cache_cap={}",
-                        self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
-                        pn,
-                        evicted_pn,
-                        page.dirty,
-                        cache.len(),
-                        cache.cap().get()
-                    );
-                }
                 self.evict_cache(file, evicted_pn, &mut page)?;
                 evicted = Some((evicted_pn, page));
             }
@@ -654,24 +628,8 @@ impl CachedFile {
                 if let Some(snapshot) = self.shared.dirty_evicted.lock().remove(&pn) {
                     page.data()[..snapshot.len()].copy_from_slice(&snapshot);
                     page.dirty = true;
-                    let log_idx = CACHE_EVICT_LOGS.fetch_add(1, Ordering::Relaxed);
-                    if log_idx < 16 || log_idx % 256 == 0 {
-                        warn!(
-                            "cached-file refill: path={}, pn={}, source=snapshot",
-                            self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
-                            pn
-                        );
-                    }
                 } else {
                     file.read_at(&mut page.data()[..len], page_start)?;
-                    let log_idx = CACHE_EVICT_LOGS.fetch_add(1, Ordering::Relaxed);
-                    if log_idx < 16 || log_idx % 256 == 0 {
-                        warn!(
-                            "cached-file refill: path={}, pn={}, source=disk",
-                            self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
-                            pn
-                        );
-                    }
                 }
             }
         }
@@ -749,30 +707,7 @@ impl CachedFile {
         let allocated_len = self.shared.allocated_len.load(Ordering::Acquire);
         if end > allocated_len {
             let grow_to = end.div_ceil(PAGE_SIZE as u64) * PAGE_SIZE as u64;
-            let log_idx = CACHE_GROW_LOGS.fetch_add(1, Ordering::Relaxed);
-            if log_idx < 32 || log_idx % 256 == 0 {
-                warn!(
-                    "cached-file grow: path={}, offset={}, end={}, allocated_len={}, grow_to={}, logical_len={}",
-                    self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
-                    offset,
-                    end,
-                    allocated_len,
-                    grow_to,
-                    self.shared.logical_len.load(Ordering::Acquire)
-                );
-            }
             self.shared.allocated_len.store(grow_to, Ordering::Release);
-        }
-        let log_idx = CACHE_GROW_LOGS.fetch_add(1, Ordering::Relaxed);
-        if log_idx < 32 || log_idx % 512 == 0 {
-            warn!(
-                "cached-file write_at: path={}, offset={}, end={}, logical_len={}, allocated_len={}",
-                self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
-                offset,
-                end,
-                self.shared.logical_len.load(Ordering::Acquire),
-                self.shared.allocated_len.load(Ordering::Acquire),
-            );
         }
         self.with_pages(
             offset..end,
@@ -849,19 +784,6 @@ impl CachedFile {
             for (pn, _) in &evicted_pages {
                 dirty_evicted.remove(pn);
             }
-        }
-        let log_idx = CACHE_SYNC_LOGS.fetch_add(1, Ordering::Relaxed);
-        if flushed_pages > 0 || !evicted_pages.is_empty() || log_idx < 8 {
-            warn!(
-                "cached-file sync: source={}, path={}, data_only={}, flushed_pages={}, evicted_dirty_pages={}, logical_len={}, allocated_len={}",
-                source,
-                self.inner.absolute_path().unwrap_or_else(|_| "<error>".into()),
-                data_only,
-                flushed_pages,
-                evicted_pages.len(),
-                logical_len,
-                self.shared.allocated_len.load(Ordering::Acquire)
-            );
         }
         file.set_len(logical_len)?;
         file.sync(data_only)?;

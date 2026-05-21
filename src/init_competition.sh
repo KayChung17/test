@@ -3,6 +3,7 @@
 export HOME=/
 
 TEST_DIR="/oscomp/glibc"
+LTPROOT="$TEST_DIR/ltp"
 
 if [ ! -d "$TEST_DIR" ]; then
     echo "=== Starry OS ==="
@@ -70,16 +71,26 @@ for script in $SCRIPTS; do
     fi
 
     # recognize bench type
-    if is_aggregate "$name"; then
-        echo "[SUITE-TYPE] aggregate"
-    elif is_directory_scan "$name"; then
+    if [ "$name" = "ltp" ] && [ -x "$LTPROOT/runltp" ]; then
         echo "[SUITE-TYPE] directory-scan"
+        export LTPROOT
+        export PATH="$LTPROOT/testcases/bin:$PATH"
+        cd "$LTPROOT" || exit 1
+        ./runltp
+        rc=$?
+        cd "$TEST_DIR" || exit 1
     else
-        echo "[SUITE-TYPE] standalone"
-    fi
+        if is_aggregate "$name"; then
+            echo "[SUITE-TYPE] aggregate"
+        elif is_directory_scan "$name"; then
+            echo "[SUITE-TYPE] directory-scan"
+        else
+            echo "[SUITE-TYPE] standalone"
+        fi
 
-    /bin/sh "$script"
-    rc=$?
+        /bin/sh "$script"
+        rc=$?
+    fi
 
     echo "[SUITE-RESULT] $name exit=$rc"
     if [ "$rc" -eq 0 ]; then

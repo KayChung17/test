@@ -167,10 +167,7 @@ pub fn sys_prctl(
             // not implemented; but avoid annoying warnings
             return Err(AxError::InvalidInput);
         }
-        _ => {
-            warn!("sys_prctl: unsupported option {option}");
-            return Err(AxError::InvalidInput);
-        }
+        _ => return Err(AxError::InvalidInput),
     }
 
     Ok(0)

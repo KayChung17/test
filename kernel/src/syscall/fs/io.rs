@@ -133,10 +133,7 @@ pub fn sys_fsync(fd: c_int) -> AxResult<isize> {
 
 pub fn sys_fdatasync(fd: c_int) -> AxResult<isize> {
     debug!("sys_fdatasync <= {fd}");
-    let f = File::from_fd(fd)?;
-    warn!("fdatasync enter: fd={}, path={}", fd, f.path());
-    f.inner().sync(true)?;
-    warn!("fdatasync exit: fd={}, path={}, rc=0", fd, f.path());
+    File::from_fd(fd)?.inner().sync(true)?;
     Ok(0)
 }
 

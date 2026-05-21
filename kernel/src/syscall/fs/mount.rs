@@ -19,7 +19,7 @@ pub fn sys_mount(
 
     let target = FS_CONTEXT.lock().resolve(target)?;
 
-    if fs_type == "tmpfs" {
+    if matches!(fs_type.as_str(), "tmpfs" | "cgroup" | "cgroup2") {
         let fs = MemoryFs::new();
         target.mount(&fs)?;
         return Ok(0);
