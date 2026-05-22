@@ -24,7 +24,7 @@ impl PowerIf for PowerImpl {
 
     /// Shutdown the whole system.
     fn system_off() -> ! {
-        let poweroff_addr = phys_to_virt(pa!(POWEROFF_PADDR)).as_mut_ptr::<u32>();
+        let poweroff_addr = phys_to_virt(pa!(POWEROFF_PADDR)).as_mut_ptr() as *mut u32;
 
         info!("Shutting down...");
         unsafe { poweroff_addr.write_volatile(0x5555u32) };
