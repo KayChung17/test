@@ -10,14 +10,11 @@
 
 .DS_Store
 
-*.elf
 *.swp
 *.swo
-*.bin
 *.dbg
 *.zip
 *.img
-*.txt
 *.log
 **/target/
 
