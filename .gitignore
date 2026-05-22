@@ -27,3 +27,5 @@ tmp/
 issue.md
 提交注意事项.md
 测评结果.md
+submit_riscv64-qemu-virt.bin
+submit_riscv64-qemu-virt.elf
