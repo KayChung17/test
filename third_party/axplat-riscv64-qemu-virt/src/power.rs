@@ -29,7 +29,9 @@ impl PowerIf for PowerImpl {
         info!("Shutting down...");
         unsafe { poweroff_addr.write_volatile(0x5555u32) };
         sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::NoReason);
-        warn!("It should shutdown!");
+        warn!("Shutdown did not terminate QEMU, requesting reboot fallback");
+        sbi_rt::system_reset(sbi_rt::ColdReboot, sbi_rt::NoReason);
+        warn!("Reset fallback did not terminate QEMU");
         loop {
             axcpu::asm::halt();
         }
