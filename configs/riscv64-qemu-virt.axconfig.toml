@@ -18,6 +18,7 @@ ticks-per-sec = 100 # uint
 ipi-irq = "0x8000_0000_0000_0001" # uint
 # MMIO ranges with format (`base_paddr`, `size`).
 mmio-ranges = [
+    [0x0010_0000, 0x1000],
     [0x0010_1000, 0x1000],
     [0x0c00_0000, 0x21_0000],
     [0x1000_0000, 0x1000],
