@@ -7,11 +7,18 @@
 
 set -e
 
-SRC="${1:?source image required}"
-DST="${2:?output image required}"
-SIZE="${3:-128}"
+MODE=image
+if [ "${1:-}" = "--from-dir" ]; then
+    MODE=dir
+    SRC_DIR="${2:?source directory required}"
+    DST="${3:?output image required}"
+    SIZE="${4:-128}"
+else
+    SRC="${1:?source image required}"
+    DST="${2:?output image required}"
+    SIZE="${3:-128}"
+fi
 
-SRC=$(realpath "$SRC")
 DST=$(realpath -m "$DST")
 D=$(dirname "$DST")
 mkdir -p "$D"
@@ -19,12 +26,23 @@ mkdir -p "$D"
 TMPDIR=$(mktemp -d -t auxbuild.XXXXXX)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "Extracting files from $SRC ..."
-debugfs -R "dump /bin/busybox              $TMPDIR/busybox"              "$SRC"
-debugfs -R "dump /lib/ld-musl-riscv64.so.1 $TMPDIR/ld-musl-riscv64.so.1" "$SRC"
-for f in passwd group hostname inittab fstab inputrc; do
-    debugfs -R "dump /etc/$f $TMPDIR/$f" "$SRC" 2>/dev/null || true
-done
+if [ "$MODE" = dir ]; then
+    SRC_DIR=$(realpath "$SRC_DIR")
+    echo "Copying files from $SRC_DIR ..."
+    cp "$SRC_DIR/bin/busybox" "$TMPDIR/busybox"
+    cp "$SRC_DIR/lib/ld-musl-riscv64.so.1" "$TMPDIR/ld-musl-riscv64.so.1"
+    for f in passwd group hostname inittab fstab inputrc; do
+        [ -f "$SRC_DIR/etc/$f" ] && cp "$SRC_DIR/etc/$f" "$TMPDIR/$f"
+    done
+else
+    SRC=$(realpath "$SRC")
+    echo "Extracting files from $SRC ..."
+    debugfs -R "dump /bin/busybox              $TMPDIR/busybox"              "$SRC"
+    debugfs -R "dump /lib/ld-musl-riscv64.so.1 $TMPDIR/ld-musl-riscv64.so.1" "$SRC"
+    for f in passwd group hostname inittab fstab inputrc; do
+        debugfs -R "dump /etc/$f $TMPDIR/$f" "$SRC" 2>/dev/null || true
+    done
+fi
 
 echo "Creating empty ext4 image ($SIZE MB)..."
 truncate -s "${SIZE}M" "$DST"

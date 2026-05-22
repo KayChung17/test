@@ -117,7 +117,8 @@ make ARCH=loongarch64 rootfs
 - 复用现有 `make/disk.img`
 - 复制根目录 `disk.img`
 - 复制 `rootfs-$(ARCH).img`
-- 若以上都不存在，则从 `ROOTFS_SOURCE_IMG` / `TEST_IMG`（以及 `make/test.img`、`test.img`、`tmp/disk-rv.img`、`tmp/disk-la.img`、`tmp/disk.img`、`sdcard-rv.img`、`sdcard-la.img`）提取最小文件集并生成 128MB 的 `make/disk.img`
+- 从仓库内提交的 `rootfs-source/$(ARCH)` 最小用户态目录生成 128MB 的 `make/disk.img`
+- 若上述最小目录不存在，再回退到 `ROOTFS_SOURCE_IMG` / `TEST_IMG`（以及 `make/test.img`、`test.img`、`tmp/disk-rv.img`、`tmp/disk-la.img`、`tmp/disk.img`、`sdcard-rv.img`、`sdcard-la.img`）提取最小文件集
 
 #### 双盘模式
 
@@ -136,15 +137,23 @@ make ARCH=loongarch64 rootfs
 
    ```
 
-2. 从评测盘提取文件生成辅助根文件系统镜像：
+2. 生成辅助根文件系统镜像：
+
+   ```bash
+   # 默认直接使用仓库内的 rootfs-source/riscv64 生成
+   make aux
+   # 或在完整构建时直接生成
+   make all
+   ```
+
+   `make aux` / `make rootfs` 会优先复用 `scripts/gen-aux-img.sh --from-dir`，从仓库内提交的 `rootfs-source/$(ARCH)` 最小用户态目录生成 `make/disk.img`（默认 128MB）。启动后 `make/disk.img` 挂载为 /，评测盘挂载到 /oscomp。
+
+   如果需要替换辅助根文件系统来源，也可以显式指定外部源盘：
 
    ```bash
    make aux TEST_IMG=path/to/disk-rv.img
-   # 或在完整构建时直接生成
    make all TEST_IMG=path/to/disk-rv.img
    ```
-
-   `make aux` / `make rootfs` 会复用 `scripts/gen-aux-img.sh`，从评测盘中提取 BusyBox、musl loader 和少量 `/etc` 文件，生成 `make/disk.img`（默认 128MB）。启动后 `make/disk.img` 挂载为 /，评测盘挂载到 /oscomp。
 
 ### 4. Build and run on QEMU 构建并运行
 
@@ -189,10 +198,10 @@ make kernel-rv
 make kernel-la
 
 # 重新生成评测需要的全部提交文件（同时按需生成 disk.img）
-make all TEST_IMG=./tmp/disk-rv.img
+make all
 
 # 单独准备辅助根文件系统镜像
-make aux TEST_IMG=./tmp/disk-rv.img
+make aux
 ```
 
 ##### 本地运行autotest评测机
