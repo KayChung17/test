@@ -5,7 +5,7 @@ use alloc::{
 
 use axfs::FS_CONTEXT;
 use axfs_ng_vfs::NodePermission;
-use axhal::uspace::UserContext;
+use axhal::{power::system_off, uspace::UserContext};
 use axsync::Mutex;
 use axtask::{AxTaskExt, spawn_task};
 use starry_process::{Pid, Process};
@@ -102,4 +102,7 @@ pub fn init(args: &[String], envs: &[String]) {
         .filesystem()
         .flush()
         .expect("Failed to flush rootfs");
+
+    info!("Powering off after init process exit");
+    system_off();
 }
