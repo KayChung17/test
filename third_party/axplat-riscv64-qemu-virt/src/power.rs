@@ -1,4 +1,6 @@
-use axplat::power::PowerIf;
+use axplat::{mem::{pa, phys_to_virt}, power::PowerIf};
+
+use crate::config::devices::POWEROFF_PADDR;
 
 struct PowerImpl;
 
@@ -22,7 +24,10 @@ impl PowerIf for PowerImpl {
 
     /// Shutdown the whole system.
     fn system_off() -> ! {
+        let poweroff_addr = phys_to_virt(pa!(POWEROFF_PADDR)).as_mut_ptr();
+
         info!("Shutting down...");
+        unsafe { poweroff_addr.write_volatile(0x5555u32) };
         sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::NoReason);
         warn!("It should shutdown!");
         loop {
