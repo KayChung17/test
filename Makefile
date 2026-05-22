@@ -35,7 +35,10 @@ default: build
 all: kernel-rv kernel-la disk.img
 
 ROOTFS_IMG = rootfs-$(ARCH).img
+ROOTFS_SIZE_MB ?= 128
+ROOTFS_SOURCE_IMG ?=
 TEST_IMG ?= test.img
+ROOTFS_TEST_IMG_CANDIDATES := $(if $(ROOTFS_SOURCE_IMG),$(ROOTFS_SOURCE_IMG)) $(if $(TEST_IMG),$(TEST_IMG)) make/test.img test.img $(if $(filter $(ARCH),riscv64),tmp/disk-rv.img tmp/disk.img sdcard-rv.img,$(if $(filter $(ARCH),loongarch64),tmp/disk-la.img tmp/disk.img sdcard-la.img))
 RV_ELF_GLOB = *_riscv64-*.elf
 LA_ELF_GLOB = *_loongarch64-*.elf
 
@@ -44,7 +47,9 @@ prepare-cargo-home:
 	@cp cargo-config.toml .cargo/config.toml
 
 rootfs:
-	@if [ -f make/disk.img ]; then \
+	@set -e; \
+	source_img=""; \
+	if [ -f make/disk.img ]; then \
 		echo "Rootfs ready: make/disk.img"; \
 	elif [ -f disk.img ]; then \
 		cp disk.img make/disk.img; \
@@ -53,13 +58,24 @@ rootfs:
 		cp $(ROOTFS_IMG) make/disk.img; \
 		echo "Rootfs ready: make/disk.img"; \
 	else \
-		echo "Missing local rootfs image. Provide disk.img, make/disk.img, or $(ROOTFS_IMG)."; \
-		exit 1; \
+		for candidate in $(ROOTFS_TEST_IMG_CANDIDATES); do \
+			if [ -n "$$candidate" ] && [ -f "$$candidate" ]; then \
+				source_img="$$candidate"; \
+				break; \
+			fi; \
+		done; \
+		if [ -n "$$source_img" ]; then \
+			echo "Generating auxiliary rootfs from $$source_img ..."; \
+			scripts/gen-aux-img.sh "$$source_img" make/disk.img $(ROOTFS_SIZE_MB); \
+			echo "Auxiliary rootfs ready: make/disk.img"; \
+		else \
+			echo "Missing rootfs input. Provide disk.img, make/disk.img, $(ROOTFS_IMG), or a source test image via ROOTFS_SOURCE_IMG/TEST_IMG (also checked: make/test.img, test.img, sdcard-rv.img, sdcard-la.img)."; \
+			exit 1; \
+		fi; \
 	fi
 
-aux: $(TEST_IMG) scripts/gen-aux-img.sh
-	@scripts/gen-aux-img.sh $(TEST_IMG) make/disk.img 128
-	@echo "Auxiliary rootfs ready: make/disk.img"
+aux:
+	@$(MAKE) --no-print-directory rootfs ROOTFS_SOURCE_IMG=$(if $(ROOTFS_SOURCE_IMG),$(ROOTFS_SOURCE_IMG),$(TEST_IMG))
 
 img:
 	@echo -e "\033[33mWARN: The 'img' target is deprecated. Please use 'rootfs' instead.\033[0m"

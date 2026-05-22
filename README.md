@@ -104,16 +104,20 @@ cargo -V
 
 #### 单盘模式
 
-下载 Starry-OS 官方根文件系统作为启动盘：
+准备一个本地根文件系统镜像作为启动盘：
 ```bash
 # Default target: riscv64
-make rootfs # 下载到 make/disk.img，启动后挂载为 /
+make rootfs
 # Explicit target
 make ARCH=riscv64 rootfs
 make ARCH=loongarch64 rootfs
 ```
 
-This will download rootfs image from [Starry-OS/rootfs](https://github.com/Starry-OS/rootfs/releases) and set up the disk file for running on QEMU.
+`make rootfs` 会按顺序尝试：
+- 复用现有 `make/disk.img`
+- 复制根目录 `disk.img`
+- 复制 `rootfs-$(ARCH).img`
+- 若以上都不存在，则从 `ROOTFS_SOURCE_IMG` / `TEST_IMG`（以及 `make/test.img`、`test.img`、`tmp/disk-rv.img`、`tmp/disk-la.img`、`tmp/disk.img`、`sdcard-rv.img`、`sdcard-la.img`）提取最小文件集并生成 128MB 的 `make/disk.img`
 
 #### 双盘模式
 
@@ -135,12 +139,12 @@ This will download rootfs image from [Starry-OS/rootfs](https://github.com/Starr
 2. 从评测盘提取文件生成辅助根文件系统镜像：
 
    ```bash
-   make aux            # 生成 make/disk.img（128MB）
-   # 或指定评测盘路径
-   make aux TEST_IMG=path/to/disk.img
+   make aux TEST_IMG=path/to/disk-rv.img
+   # 或在完整构建时直接生成
+   make all TEST_IMG=path/to/disk-rv.img
    ```
 
-   启动后 `make/disk.img` 挂载为 /，评测盘挂载到 /oscomp。
+   `make aux` / `make rootfs` 会复用 `scripts/gen-aux-img.sh`，从评测盘中提取 BusyBox、musl loader 和少量 `/etc` 文件，生成 `make/disk.img`（默认 128MB）。启动后 `make/disk.img` 挂载为 /，评测盘挂载到 /oscomp。
 
 ### 4. Build and run on QEMU 构建并运行
 
@@ -184,11 +188,11 @@ make kernel-rv
 # 重新生成评测机使用的 LoongArch 内核 ELF
 make kernel-la
 
-# 重新生成评测需要的全部提交文件
-make all
+# 重新生成评测需要的全部提交文件（同时按需生成 disk.img）
+make all TEST_IMG=./tmp/disk-rv.img
 
-# 重新准备辅助根文件系统镜像
-make aux TEST_IMG=./sdcard-rv.img
+# 单独准备辅助根文件系统镜像
+make aux TEST_IMG=./tmp/disk-rv.img
 ```
 
 ##### 本地运行autotest评测机
