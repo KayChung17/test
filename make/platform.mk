@@ -9,13 +9,14 @@ endif
 define resolve_config
   $(if $(wildcard $(PLAT_CONFIG)),\
     $(PLAT_CONFIG),\
-    $(shell cargo axplat info -C $(cargo_manifest_dir) -c $(PLAT_PACKAGE)))
+    $(if $(filter $(PLAT_PACKAGE),axplat-riscv64-qemu-virt),$(abspath $(CURDIR)/../configs/riscv64-qemu-virt.toml),\
+      $(if $(filter $(PLAT_PACKAGE),axplat-loongarch64-qemu-virt),$(abspath $(CURDIR)/../configs/loongarch64-qemu-virt.toml),)))
 endef
 
 define validate_config
-  $(eval package := $(shell axconfig-gen $(PLAT_CONFIG) -r package 2>/dev/null)) \
+  $(eval package := $(shell sed -n 's/^package = "\([^"]*\)".*/\1/p' $(PLAT_CONFIG) | head -1)) \
   $(if $(strip $(package)),,$(error PLAT_CONFIG=$(PLAT_CONFIG) is not a valid platform configuration file)) \
-  $(if $(filter "$(PLAT_PACKAGE)",$(package)),,\
+  $(if $(filter $(PLAT_PACKAGE),$(package)),,\
     $(error `PLAT_PACKAGE` field mismatch: expected $(PLAT_PACKAGE), got $(package)))
 endef
 
@@ -33,8 +34,9 @@ ifeq ($(MYPLAT),)
     $(error "ARCH" must be one of "x86_64", "riscv64", "aarch64" or "loongarch64")
   endif
   PLAT_CONFIG := $(strip $(call resolve_config))
-  # We don't need to check whether `PLAT_CONFIG` is valid here, as the `PLAT_PACKAGE`
-  # is a valid pacakage.
+  ifeq ($(wildcard $(PLAT_CONFIG)),)
+    $(error No bundled platform config for $(PLAT_PACKAGE); set PLAT_CONFIG explicitly)
+  endif
 
   $(call validate_config)
 else
@@ -47,7 +49,7 @@ else
   $(call validate_config)
 
   # Read the architecture name from the configuration file
-  _arch := $(patsubst "%",%,$(shell axconfig-gen $(PLAT_CONFIG) -r arch))
+  _arch := $(shell sed -n 's/^arch = "\([^"]*\)".*/\1/p' $(PLAT_CONFIG) | head -1)
   ifeq ($(origin ARCH),command line)
     ifneq ($(ARCH),$(_arch))
       $(error "ARCH=$(ARCH)" is not compatible with "MYPLAT=$(MYPLAT)")
@@ -56,4 +58,4 @@ else
   ARCH := $(_arch)
 endif
 
-PLAT_NAME := $(patsubst "%",%,$(shell axconfig-gen $(PLAT_CONFIG) -r platform))
+PLAT_NAME := $(shell sed -n 's/^platform = "\([^"]*\)".*/\1/p' $(PLAT_CONFIG) | head -1)

@@ -145,8 +145,8 @@ AR := $(CROSS_COMPILE)ar
 RANLIB := $(CROSS_COMPILE)ranlib
 LD := rust-lld -flavor gnu
 
-OBJDUMP ?= rust-objdump -d --print-imm-hex --x86-asm-syntax=intel
-OBJCOPY ?= rust-objcopy --binary-architecture=$(ARCH)
+OBJDUMP ?= llvm-objdump -d --print-imm-hex --x86-asm-syntax=intel
+OBJCOPY ?= llvm-objcopy --binary-architecture=$(ARCH)
 GDB ?= gdb
 
 # Paths

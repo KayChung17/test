@@ -25,5 +25,5 @@ ifeq ($(MAKECMDGOALS), doc_check_missing)
 endif
 
 define cargo_build
-  $(call run_cmd,cargo -C $(1) build,$(build_args) --features "$(strip $(2))")
+  $(call run_cmd,cargo +nightly-2025-05-20 -C $(1) build,$(build_args) --features "$(strip $(2))")
 endef

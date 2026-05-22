@@ -1,0 +1,59 @@
+# Architecture identifier.
+arch = "loongarch64" # str
+# Platform package.
+package = "axplat-loongarch64-qemu-virt" # str
+# Platform identifier.
+platform = "loongarch64-qemu-virt" # str
+# Stack size of each task.
+task-stack-size = 0x40000 # uint
+# Number of timer ticks per second (Hz). A timer tick may contain several timer
+# interrupts.
+ticks-per-sec = 100 # uint
+
+#
+# Device specifications
+#
+[devices]
+eiointc-irq = 0x03 # uint
+eiointc-paddr = 0x1400 # uint
+ged-paddr = 0x100E001C # uint
+ipi-irq = 12 # uint
+mmio-ranges = [
+    [0x1000_0000, 0x0000_0400],
+    [0x100D_0000, 0x0000_1000],
+    [0x100E_0000, 0x0000_1000],
+    [0x1FE0_0000, 0x0000_1000],
+    [0x2000_0000, 0x1000_0000],
+    [0x4000_0000, 0x0002_0000]
+] # [(uint, uint)]
+pch-pic-paddr = 0x10000000 # uint
+pci-bus-end = 0x7f # uint
+pci-ecam-base = 0x2000_0000 # uint
+pci-ranges = [
+    [0, 0],
+    [0x4000_0000, 0x0002_0000]
+] # [(uint, uint)]
+rtc-paddr = 0x100d_0100 # uint
+timer-frequency = 100_000_000 # uint
+timer-irq = 11 # uint
+uart-irq = 0x2 # uint
+uart-paddr = 0x1FE001E0 # uint
+virtio-mmio-ranges = [] # [(uint, uint)]
+
+#
+# Platform configs
+#
+[plat]
+boot-stack-size = 0x40000 # uint
+high-memory-base = 0x8000_0000 # uint
+kernel-aspace-base = "0xffff_8000_0000_0000" # uint
+kernel-aspace-size = "0x0000_7fff_ffff_f000" # uint
+kernel-base-paddr = 0x0020_0000 # uint
+kernel-base-vaddr = "0xffff_8000_0020_0000" # uint
+low-memory-base = 0x0 # uint
+low-memory-size = 0x1000_0000 # uint
+max-cpu-num = 1 # uint
+phys-boot-offset = "0x9000_0000_0000_0000" # uint
+phys-bus-offset = 0 # uint
+phys-memory-size = 1073741824 # uint
+phys-virt-offset = "0xffff_8000_0000_0000" # uint

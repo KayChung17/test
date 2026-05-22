@@ -3,6 +3,11 @@ export ARCH := riscv64
 export LOG := warn
 export DWARF := y
 export MEMTRACK := n
+export CARGO_TARGET_DIR := $(PWD)/target
+export CARGO_NET_OFFLINE := true
+export CARGO_TERM_COLOR := always
+export RUSTUP_OFFLINE := true
+export RUSTUP_TOOLCHAIN := nightly-2025-05-20-x86_64-unknown-linux-gnu
 
 # QEMU Options
 export BLK := y
@@ -29,20 +34,28 @@ endif
 default: build
 all: kernel-rv kernel-la disk.img
 
-ROOTFS_URL = https://github.com/Starry-OS/rootfs/releases/download/20260214
 ROOTFS_IMG = rootfs-$(ARCH).img
 TEST_IMG ?= test.img
 RV_ELF_GLOB = *_riscv64-*.elf
 LA_ELF_GLOB = *_loongarch64-*.elf
 
+prepare-cargo-home:
+	@mkdir -p .cargo
+	@cp cargo-config.toml .cargo/config.toml
+
 rootfs:
-	@if [ ! -f $(ROOTFS_IMG) ]; then \
-		echo "Image not found, downloading..."; \
-		curl -f -L $(ROOTFS_URL)/$(ROOTFS_IMG).xz -O; \
-		xz -d $(ROOTFS_IMG).xz; \
+	@if [ -f make/disk.img ]; then \
+		echo "Rootfs ready: make/disk.img"; \
+	elif [ -f disk.img ]; then \
+		cp disk.img make/disk.img; \
+		echo "Rootfs ready: make/disk.img"; \
+	elif [ -f $(ROOTFS_IMG) ]; then \
+		cp $(ROOTFS_IMG) make/disk.img; \
+		echo "Rootfs ready: make/disk.img"; \
+	else \
+		echo "Missing local rootfs image. Provide disk.img, make/disk.img, or $(ROOTFS_IMG)."; \
+		exit 1; \
 	fi
-	@cp $(ROOTFS_IMG) make/disk.img
-	@echo "Rootfs ready: make/disk.img"
 
 aux: $(TEST_IMG) scripts/gen-aux-img.sh
 	@scripts/gen-aux-img.sh $(TEST_IMG) make/disk.img 128
@@ -55,7 +68,7 @@ img:
 defconfig justrun clean:
 	@$(MAKE) -C make $@
 
-build run debug disasm: defconfig
+build run debug disasm: prepare-cargo-home defconfig
 	@$(MAKE) -C make $@ \
 		$(if $(TEST_IMG),TEST_IMG=$(abspath $(TEST_IMG))) \
 		DISK_IMG=$(abspath make/disk.img)
@@ -97,4 +110,4 @@ la:
 vf2:
 	$(MAKE) ARCH=riscv64 APP_FEATURES=vf2 MYPLAT=axplat-riscv64-visionfive2 BUS=mmio build
 
-.PHONY: build run justrun debug disasm clean rootfs aux
+.PHONY: prepare-cargo-home build run justrun debug disasm clean rootfs aux

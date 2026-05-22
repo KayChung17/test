@@ -1,19 +1,12 @@
 # Necessary dependencies for the build system
 
-# Tool to parse information about the target package
-ifeq ($(shell cargo axplat --version 2>/dev/null),)
-  $(info Installing cargo-axplat...)
-  $(shell cargo install cargo-axplat)
+# Offline submission builds must not download tools on demand.
+ifeq ($(shell llvm-objcopy --version 2>/dev/null),)
+  $(error Missing required host tool: llvm-objcopy)
 endif
 
-# Tool to generate platform configuration files
-ifeq ($(shell axconfig-gen --version 2>/dev/null),)
-  $(info Installing axconfig-gen...)
-  $(shell cargo install axconfig-gen)
-endif
-
-# Cargo binutils
-ifeq ($(shell cargo install --list | grep cargo-binutils),)
-  $(info Installing cargo-binutils...)
-  $(shell cargo install cargo-binutils)
+ifeq ($(DWARF), y)
+  ifeq ($(shell llvm-objdump --version 2>/dev/null),)
+    $(error Missing required host tool: llvm-objdump)
+  endif
 endif
