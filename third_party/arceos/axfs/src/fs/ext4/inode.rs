@@ -1,5 +1,5 @@
 use alloc::{borrow::ToOwned, string::String, sync::Arc};
-use core::{any::Any, sync::atomic::{AtomicU64, Ordering}, task::Context};
+use core::{any::Any, task::Context};
 
 use axfs_ng_vfs::{
     DeviceId, DirEntry, DirEntrySink, DirNode, DirNodeOps, FileNode, FileNodeOps, FilesystemOps,
@@ -13,9 +13,6 @@ use super::{
     Ext4Filesystem,
     util::{LwExt4Filesystem, into_vfs_err, into_vfs_type},
 };
-
-static EXT4_WRITE_LOGS: AtomicU64 = AtomicU64::new(0);
-static EXT4_APPEND_LOGS: AtomicU64 = AtomicU64::new(0);
 
 pub struct Inode {
     fs: Arc<Ext4Filesystem>,
@@ -146,15 +143,6 @@ impl FileNodeOps for Inode {
     }
 
     fn write_at(&self, buf: &[u8], offset: u64) -> VfsResult<usize> {
-        let log_idx = EXT4_WRITE_LOGS.fetch_add(1, Ordering::Relaxed);
-        if buf.len() <= 1024 && (log_idx < 32 || log_idx % 512 == 0) {
-            warn!(
-                "ext4 write_at: ino={}, offset={}, len={}",
-                self.ino,
-                offset,
-                buf.len()
-            );
-        }
         self.fs
             .lock()
             .write_at(self.ino, buf, offset)
@@ -166,15 +154,6 @@ impl FileNodeOps for Inode {
         let length = fs
             .with_inode_ref(self.ino, |inode| Ok(inode.size()))
             .map_err(into_vfs_err)?;
-        let log_idx = EXT4_APPEND_LOGS.fetch_add(1, Ordering::Relaxed);
-        if log_idx < 32 || log_idx % 256 == 0 {
-            warn!(
-                "ext4 append: ino={}, append_start={}, len={}",
-                self.ino,
-                length,
-                buf.len()
-            );
-        }
         let written = fs.write_at(self.ino, buf, length).map_err(into_vfs_err)?;
         Ok((written, length + written as u64))
     }

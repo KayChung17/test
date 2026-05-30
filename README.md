@@ -208,8 +208,12 @@ make aux
 参考 https://github.com/oscomp/autotest-for-oskernel
 
 1. rv和la评测是分开的，可以基于当前要测试的架构准备 kernel-rv / kernel-la
-2. disk.img、评测盘必须准备
+2. 评测盘必须单独准备（disk.img 会在 `make all` 时自动生成）
 3. 重新打包 autotest-for-oskernel/kernel.zip
+
+```bash
+qemu-system-riscv64 -machine virt -kernel kernel-rv -m 1G -nographic -smp 1 -bios default -drive file=./tmp/sdcard-rv.img,if=none,format=raw,id=x0 -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -no-reboot -device virtio-net-device,netdev=net -netdev user,id=net -rtc base=utc -drive file=./tmp/disk.img,if=none,format=raw,id=x1 -device virtio-blk-device,drive=x1,bus=virtio-mmio-bus.1
+```
 
 Note:
 
@@ -219,7 +223,7 @@ Note:
 
 ## TODO
 
-- [ ] 本地缺少la架构官方评测构建链所需的完整的 LoongArch 工具链支持，无法稳定生成可用于官方评测的 kernel-la
+
 
 ## License
 

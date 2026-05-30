@@ -135,6 +135,7 @@ ln busybox wget
 ln busybox uname
 ln busybox id
 ln busybox whoami
+ln busybox mktemp
 
 cd /lib
 write ld-musl-riscv64.so.1 ld-musl-riscv64.so.1
