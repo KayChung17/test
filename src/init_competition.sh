@@ -2,6 +2,9 @@
 
 export HOME=/
 
+# Read skip list from file if present (for local testing)
+[ -f /etc/skip_suites ] && SKIP_SUITES=$(cat /etc/skip_suites)
+
 TEST_DIR="/oscomp/glibc"
 LTPROOT="$TEST_DIR/ltp"
 
@@ -62,6 +65,14 @@ is_directory_scan() {
 for script in $SCRIPTS; do
     name="${script%_testcode.sh}"
     echo "[SUITE-BEGIN] $name"
+
+    # Skip suites listed in SKIP_SUITES (comma-separated)
+    if echo ",$SKIP_SUITES," | grep -q ",$name,"; then
+        echo "[SUITE-SKIP] $name (skipped by SKIP_SUITES)"
+        SUITE_SKIP=$((SUITE_SKIP + 1))
+        echo "[SUITE-END] $name"
+        continue
+    fi
 
     if [ ! -x "$script" ]; then
         echo "[SUITE-SKIP] $name (not executable)"

@@ -136,6 +136,8 @@ ln busybox uname
 ln busybox id
 ln busybox whoami
 ln busybox mktemp
+ln busybox tr
+ln busybox timeout
 
 cd /lib
 write ld-musl-riscv64.so.1 ld-musl-riscv64.so.1
@@ -150,6 +152,10 @@ HEADER
 for f in hostname inittab fstab inputrc; do
     [ -f "$f" ] && echo "write $f $f"
 done >> "$CMD"
+
+# Optional: skip_suites for local testing (empty by default)
+SKIP_FILE="${SKIP_SUITES_FILE:-/dev/null}"
+echo "write $SKIP_FILE skip_suites" >> "$CMD"
 
 debugfs -w "$DST" < "$CMD"
 
