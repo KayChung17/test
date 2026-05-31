@@ -86,10 +86,22 @@ for script in $SCRIPTS; do
         echo "[SUITE-TYPE] directory-scan"
         export LTPROOT
         export PATH="$LTPROOT/testcases/bin:$PATH"
+        # Pre-generate alltests file using input redirection
+        # (BusyBox sh's "cat | while read" pipe doesn't propagate writes)
+        LTP_TMP="/tmp/ltp-run-$$"
+        mkdir -p "$LTP_TMP"
+        LTP_ALLTESTS="$LTP_TMP/alltests"
+        while read scenfile; do
+            f="$LTPROOT/runtest/$scenfile"
+            [ -f "$f" ] && cat "$f" >> "$LTP_ALLTESTS"
+        done < "$LTPROOT/scenario_groups/default"
+        echo "[LTP] alltests: $(wc -l < "$LTP_ALLTESTS" 2>/dev/null) lines"
         cd "$LTPROOT" || exit 1
-        ./runltp
+        mkdir -p "$LTPROOT/output" "$LTPROOT/results"
+        "$LTPROOT/bin/ltp-pan" -e -S -O "$LTP_TMP" -a $$ -n $$ -f "$LTP_ALLTESTS"
         rc=$?
         cd "$TEST_DIR" || exit 1
+        rm -rf "$LTP_TMP"
     else
         if is_aggregate "$name"; then
             echo "[SUITE-TYPE] aggregate"
