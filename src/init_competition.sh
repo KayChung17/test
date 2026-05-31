@@ -95,12 +95,36 @@ for script in $SCRIPTS; do
             f="$LTPROOT/runtest/$scenfile"
             [ -f "$f" ] && cat "$f" >> "$LTP_ALLTESTS"
         done < "$LTPROOT/scenario_groups/default"
-        echo "[LTP] alltests: $(wc -l < "$LTP_ALLTESTS" 2>/dev/null) lines"
-        cd "$LTPROOT" || exit 1
-        # Pass pre-generated alltests to runltp via -f flag
-        ./runltp -f "$LTP_ALLTESTS"
-        rc=$?
-        cd "$TEST_DIR" || exit 1
+        LTP_LINES=$(wc -l < "$LTP_ALLTESTS" 2>/dev/null)
+        echo "[LTP] alltests: $LTP_LINES lines"
+        LTP_PASS=0
+        LTP_FAIL=0
+        LTP_TOTAL=0
+        # Run each test binary directly (bypass ltp-pan)
+        while read line; do
+            case "$line" in \#*|"") continue;; esac
+            tbin=$(echo "$line" | awk '{print $2}')
+            [ -z "$tbin" ] && continue
+            LTP_TOTAL=$((LTP_TOTAL + 1))
+            if [ -x "$LTPROOT/testcases/bin/$tbin" ]; then
+                "$LTPROOT/testcases/bin/$tbin" < /dev/null > /dev/null 2>&1 &
+                child=$!
+                ( sleep 3 && kill -9 $child 2>/dev/null ) &
+                wd=$!
+                wait $child 2>/dev/null
+                ret=$?
+                kill -9 $wd 2>/dev/null; wait $wd 2>/dev/null
+            else
+                ret=127
+            fi
+            if [ "$ret" -eq 0 ]; then
+                LTP_PASS=$((LTP_PASS + 1))
+            else
+                LTP_FAIL=$((LTP_FAIL + 1))
+            fi
+        done < "$LTP_ALLTESTS"
+        echo "[LTP] total=$LTP_TOTAL pass=$LTP_PASS fail=$LTP_FAIL"
+        rc=$((LTP_FAIL > 0 ? 1 : 0))
         rm -f "$LTP_ALLTESTS"
     else
         if is_aggregate "$name"; then
