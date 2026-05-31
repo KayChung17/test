@@ -96,17 +96,12 @@ for script in $SCRIPTS; do
             [ -f "$f" ] && cat "$f" >> "$LTP_ALLTESTS"
         done < "$LTPROOT/scenario_groups/default"
         echo "[LTP] alltests: $(wc -l < "$LTP_ALLTESTS" 2>/dev/null) lines"
-        echo "[LTP] alltests path: $LTP_ALLTESTS"
-        echo "[LTP] alltests head: $(head -3 "$LTP_ALLTESTS" 2>/dev/null)"
-        echo "[LTP] ltp-pan: $(ls -la "$LTPROOT/bin/ltp-pan" 2>&1)"
         cd "$LTPROOT" || exit 1
-        mkdir -p "$LTPROOT/output" "$LTPROOT/results"
-        echo "[LTP] CMD: $LTPROOT/bin/ltp-pan -e -S -O $LTP_TMP -a $$ -n $$ -f $LTP_ALLTESTS"
-        "$LTPROOT/bin/ltp-pan" -e -S -O "$LTP_TMP" -a $$ -n $$ -f "$LTP_ALLTESTS"
+        # Pass pre-generated alltests to runltp via -f flag
+        ./runltp -f "$LTP_ALLTESTS"
         rc=$?
-        echo "[LTP] ltp-pan exit: $rc"
         cd "$TEST_DIR" || exit 1
-        rm -rf "$LTP_TMP"
+        rm -f "$LTP_ALLTESTS"
     else
         if is_aggregate "$name"; then
             echo "[SUITE-TYPE] aggregate"
