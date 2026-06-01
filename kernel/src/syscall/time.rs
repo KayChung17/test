@@ -109,7 +109,8 @@ pub fn sys_setitimer(
     let old = curr
         .as_thread()
         .time
-        .borrow_mut()
+        .try_borrow_mut()
+        .map_err(|_| AxError::WouldBlock)?
         .set_itimer(ty, interval, remained);
 
     if let Some(old_value) = old_value.nullable() {
