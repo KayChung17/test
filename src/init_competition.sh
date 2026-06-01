@@ -86,40 +86,10 @@ for script in $SCRIPTS; do
         echo "[SUITE-TYPE] directory-scan"
         export LTPROOT
         export PATH="$LTPROOT/testcases/bin:$PATH"
-        # Pre-generate alltests (BusyBox sh pipe workaround)
-        LTP_ALLTESTS="/tmp/ltp-alltests-$$"
-        while read scenfile; do
-            f="$LTPROOT/runtest/$scenfile"
-            [ -f "$f" ] && cat "$f" >> "$LTP_ALLTESTS"
-        done < "$LTPROOT/scenario_groups/default"
-        LTP_PASS=0; LTP_FAIL=0; LTP_TOTAL=0
-        LTP_START=$(cut -d. -f1 /proc/uptime)
-        LTP_TIME_LIMIT=300  # 5 minutes max
-        while read line; do
-            case "$line" in \#*|"") continue;; esac
-            tbin=$(echo "$line" | awk '{print $2}')
-            [ -z "$tbin" ] && continue
-            # Check elapsed time
-            NOW=$(cut -d. -f1 /proc/uptime)
-            ELAPSED=$((NOW - LTP_START))
-            [ "$ELAPSED" -ge "$LTP_TIME_LIMIT" ] && { echo "[LTP] time limit reached at $LTP_TOTAL tests"; break; }
-            LTP_TOTAL=$((LTP_TOTAL + 1))
-            if [ -x "$LTPROOT/testcases/bin/$tbin" ]; then
-                "$LTPROOT/testcases/bin/$tbin" < /dev/null > /dev/null 2>&1 &
-                child=$!
-                ( sleep 1 && kill -9 $child 2>/dev/null ) &
-                wd=$!
-                wait $child 2>/dev/null
-                ret=$?
-                kill -9 $wd 2>/dev/null; wait $wd 2>/dev/null
-            else
-                ret=127
-            fi
-            [ "$ret" -eq 0 ] && LTP_PASS=$((LTP_PASS + 1)) || LTP_FAIL=$((LTP_FAIL + 1))
-        done < "$LTP_ALLTESTS"
-        echo "[LTP] total=$LTP_TOTAL pass=$LTP_PASS fail=$LTP_FAIL"
-        rc=0
-        rm -f "$LTP_ALLTESTS"
+        cd "$LTPROOT" || exit 1
+        ./runltp
+        rc=$?
+        cd "$TEST_DIR" || exit 1
     else
         if is_aggregate "$name"; then
             echo "[SUITE-TYPE] aggregate"
