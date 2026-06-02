@@ -153,9 +153,11 @@ for f in hostname inittab fstab inputrc; do
     [ -f "$f" ] && echo "write $f $f"
 done >> "$CMD"
 
-# Optional: skip_suites for local testing (empty by default)
+# Optional: suite controls for local testing (empty by default)
 SKIP_FILE="${SKIP_SUITES_FILE:-/dev/null}"
+ONLY_FILE="${ONLY_SUITES_FILE:-/dev/null}"
 echo "write $SKIP_FILE skip_suites" >> "$CMD"
+echo "write $ONLY_FILE only_suites" >> "$CMD"
 
 debugfs -w "$DST" < "$CMD"
 

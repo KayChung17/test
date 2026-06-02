@@ -119,6 +119,18 @@ pub fn sys_accept4(
 
     let cloexec = flags & O_CLOEXEC != 0;
 
+    // Linux-like precedence for accept03: certain non-socket descriptors (e.g.
+    // O_PATH/open_tree-style fds) should report EBADF rather than ENOTSOCK.
+    if let Ok(file) = crate::file::File::from_fd(fd) {
+        if file.flags() & linux_raw_sys::general::O_PATH as u32 != 0 {
+            return Err(AxError::BadFileDescriptor);
+        }
+        return Err(AxError::BadFileDescriptor);
+    }
+    if crate::file::Directory::from_fd(fd).is_ok() {
+        return Err(AxError::BadFileDescriptor);
+    }
+
     let socket = Socket::from_fd(fd)?;
     let socket = Socket(socket.accept()?);
     if flags & O_NONBLOCK != 0 {

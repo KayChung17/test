@@ -56,6 +56,27 @@ pub fn sys_chdir(path: *const c_char) -> AxResult<isize> {
 
     let mut fs = FS_CONTEXT.lock();
     let entry = fs.resolve(path)?;
+    let meta = entry.metadata()?;
+    if meta.node_type != NodeType::Directory {
+        return Err(AxError::NotADirectory);
+    }
+    let curr = current();
+    let uid = curr.as_thread().proc_data.uid();
+    let gid = curr.as_thread().proc_data.gid();
+    let mode = meta.mode.bits();
+    let allowed = if uid == 0 {
+        true
+    } else if uid == meta.uid {
+        (mode & 0o100) != 0
+    } else if gid == meta.gid {
+        (mode & 0o010) != 0
+    } else {
+        (mode & 0o001) != 0
+    };
+    if !allowed {
+        return Err(AxError::from(LinuxError::EACCES));
+    }
+
     fs.set_current_dir(entry)?;
     Ok(0)
 }
@@ -68,12 +89,15 @@ pub fn sys_fchdir(dirfd: i32) -> AxResult<isize> {
     let curr = current();
     let uid = curr.as_thread().proc_data.uid();
     let gid = curr.as_thread().proc_data.gid();
-    let allowed = if uid == meta.uid {
-        meta.mode.contains(NodePermission::OWNER_EXEC)
+    let mode = meta.mode.bits();
+    let allowed = if uid == 0 {
+        true
+    } else if uid == meta.uid {
+        (mode & 0o100) != 0
     } else if gid == meta.gid {
-        meta.mode.contains(NodePermission::GROUP_EXEC)
+        (mode & 0o010) != 0
     } else {
-        meta.mode.contains(NodePermission::OTHER_EXEC)
+        (mode & 0o001) != 0
     };
     if !allowed {
         return Err(AxError::from(LinuxError::EACCES));
@@ -120,12 +144,15 @@ pub fn sys_mkdirat(dirfd: i32, path: *const c_char, mode: u32) -> AxResult<isize
         let curr = current();
         let uid = curr.as_thread().proc_data.uid();
         let gid = curr.as_thread().proc_data.gid();
-        let allowed = if uid == meta.uid {
-            meta.mode.contains(NodePermission::OWNER_WRITE | NodePermission::OWNER_EXEC)
+        let pmode = meta.mode.bits();
+        let allowed = if uid == 0 {
+            (pmode & 0o111) != 0 && (pmode & 0o222) != 0
+        } else if uid == meta.uid {
+            (pmode & 0o300) == 0o300
         } else if gid == meta.gid {
-            meta.mode.contains(NodePermission::GROUP_WRITE | NodePermission::GROUP_EXEC)
+            (pmode & 0o030) == 0o030
         } else {
-            meta.mode.contains(NodePermission::OTHER_WRITE | NodePermission::OTHER_EXEC)
+            (pmode & 0o003) == 0o003
         };
         if !allowed {
             return Err(AxError::from(LinuxError::EACCES));

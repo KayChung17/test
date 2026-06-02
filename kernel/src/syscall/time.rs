@@ -25,8 +25,7 @@ pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxR
         }
         _ => {
             warn!("Called sys_clock_gettime for unsupported clock {clock_id}");
-            wall_time()
-            // return Err(AxError::EINVAL);
+            return Err(AxError::InvalidInput);
         }
     };
     ts.vm_write(timespec::from_time_value(now))?;
@@ -39,8 +38,19 @@ pub fn sys_gettimeofday(ts: *mut timeval) -> AxResult<isize> {
 }
 
 pub fn sys_clock_getres(clock_id: __kernel_clockid_t, res: *mut timespec) -> AxResult<isize> {
-    if clock_id as u32 != CLOCK_MONOTONIC && clock_id as u32 != CLOCK_REALTIME {
-        warn!("Called sys_clock_getres for unsupported clock {clock_id}");
+    match clock_id as u32 {
+        CLOCK_REALTIME
+        | CLOCK_REALTIME_COARSE
+        | CLOCK_MONOTONIC
+        | CLOCK_MONOTONIC_RAW
+        | CLOCK_MONOTONIC_COARSE
+        | CLOCK_BOOTTIME
+        | CLOCK_PROCESS_CPUTIME_ID
+        | CLOCK_THREAD_CPUTIME_ID => {}
+        _ => {
+            warn!("Called sys_clock_getres for unsupported clock {clock_id}");
+            return Err(AxError::InvalidInput);
+        }
     }
     if let Some(res) = res.nullable() {
         res.vm_write(timespec::from_time_value(TimeValue::from_micros(1)))?;

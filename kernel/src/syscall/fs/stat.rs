@@ -11,6 +11,7 @@ use starry_vm::{VmMutPtr, VmPtr};
 use crate::{
     file::{File, FileLike, resolve_at},
     mm::vm_load_string,
+    task::AsThread,
 };
 
 /// Get the file metadata by `path` and write into `statbuf`.
@@ -114,18 +115,29 @@ pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) 
     if mode == 0 {
         return Ok(0);
     }
-    let mut required_mode = NodePermission::empty();
-    if mode & R_OK != 0 {
-        required_mode |= NodePermission::OWNER_READ;
-    }
-    if mode & W_OK != 0 {
-        required_mode |= NodePermission::OWNER_WRITE;
-    }
-    if mode & X_OK != 0 {
-        required_mode |= NodePermission::OWNER_EXEC;
-    }
-    let required_mode = required_mode.bits();
-    if (file.stat()?.mode as u16 & required_mode) != required_mode {
+
+    let stat = file.stat()?;
+    let curr = axtask::current();
+    let uid = curr.as_thread().proc_data.uid();
+    let gid = curr.as_thread().proc_data.gid();
+    let perm = stat.mode as u16;
+
+    let (read_ok, write_ok, exec_ok) = if uid == 0 {
+        // Linux-like root semantics: read/write bypass DAC; execute requires some exec bit.
+        let exec_any = (perm & 0o111) != 0;
+        (true, true, exec_any)
+    } else if uid == stat.uid {
+        ((perm & 0o400) != 0, (perm & 0o200) != 0, (perm & 0o100) != 0)
+    } else if gid == stat.gid {
+        ((perm & 0o040) != 0, (perm & 0o020) != 0, (perm & 0o010) != 0)
+    } else {
+        ((perm & 0o004) != 0, (perm & 0o002) != 0, (perm & 0o001) != 0)
+    };
+
+    if (mode & R_OK != 0 && !read_ok)
+        || (mode & W_OK != 0 && !write_ok)
+        || (mode & X_OK != 0 && !exec_ok)
+    {
         return Err(AxError::PermissionDenied);
     }
 

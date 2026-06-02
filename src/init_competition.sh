@@ -2,8 +2,9 @@
 
 export HOME=/
 
-# Read skip list from file if present (for local testing)
+# Read suite controls from files if present (for local testing)
 [ -f /etc/skip_suites ] && SKIP_SUITES=$(cat /etc/skip_suites)
+[ -f /etc/only_suites ] && ONLY_SUITES=$(cat /etc/only_suites)
 
 TEST_DIR="/oscomp/glibc"
 LTPROOT="$TEST_DIR/ltp"
@@ -66,6 +67,14 @@ for script in $SCRIPTS; do
     name="${script%_testcode.sh}"
     echo "[SUITE-BEGIN] $name"
 
+    # Local testing helper: if ONLY_SUITES is set, run only the listed suites.
+    if [ -n "$ONLY_SUITES" ] && ! echo ",$ONLY_SUITES," | grep -q ",$name,"; then
+        echo "[SUITE-SKIP] $name (filtered by ONLY_SUITES)"
+        SUITE_SKIP=$((SUITE_SKIP + 1))
+        echo "[SUITE-END] $name"
+        continue
+    fi
+
     # Skip suites listed in SKIP_SUITES (comma-separated)
     if echo ",$SKIP_SUITES," | grep -q ",$name,"; then
         echo "[SUITE-SKIP] $name (skipped by SKIP_SUITES)"
@@ -92,10 +101,11 @@ for script in $SCRIPTS; do
         : > "$LTP_ALLTESTS"
         for case in \
             chmod01 chmod03 \
+            access02 access03 chdir01 \
             alarm02 alarm03 alarm06 alarm07 \
             chown05 chroot03 \
             abort01 accept01 \
-            clock_nanosleep04 access03
+            clock_nanosleep04
         do
             for scenfile in syscalls fs; do
                 f="$LTPROOT/runtest/$scenfile"
