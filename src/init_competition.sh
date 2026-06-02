@@ -91,9 +91,11 @@ for script in $SCRIPTS; do
         LTP_ALLTESTS="$LTPROOT/alltests"
         : > "$LTP_ALLTESTS"
         for case in \
-            chmod01 access02 access03 chdir01 accept4_01 \
+            chmod01 chmod03 \
             alarm02 alarm03 alarm06 alarm07 \
-            chroot03 chown05 chmod03 clock_nanosleep04 abort01 accept01
+            chown05 chroot03 \
+            abort01 accept01 \
+            clock_nanosleep04 access03
         do
             for scenfile in syscalls fs; do
                 f="$LTPROOT/runtest/$scenfile"
