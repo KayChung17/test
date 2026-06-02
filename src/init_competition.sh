@@ -86,10 +86,21 @@ for script in $SCRIPTS; do
         echo "[SUITE-TYPE] directory-scan"
         export LTPROOT
         export PATH="$LTPROOT/testcases/bin:$PATH"
+        # Pre-generate alltests
+        LTP_ALLTESTS="/tmp/ltp-alltests-$$"
+        while read scenfile; do
+            f="$LTPROOT/runtest/$scenfile"
+            [ -f "$f" ] && cat "$f" >> "$LTP_ALLTESTS"
+        done < "$LTPROOT/scenario_groups/default"
+        # Copy alltests to ltp dir (ltp-pan needs relative path)
+        cp "$LTP_ALLTESTS" "$LTPROOT/alltests"
         cd "$LTPROOT" || exit 1
-        ./runltp
+        mkdir -p output results
+        ./bin/ltp-pan -e -S -a $$ -n $$ -f alltests
         rc=$?
+        echo "[LTP] ltp-pan exit: $rc"
         cd "$TEST_DIR" || exit 1
+        rm -f "$LTP_ALLTESTS" "$LTPROOT/alltests"
     else
         if is_aggregate "$name"; then
             echo "[SUITE-TYPE] aggregate"
