@@ -96,7 +96,7 @@ for script in $SCRIPTS; do
         cp "$LTP_ALLTESTS" "$LTPROOT/alltests"
         cd "$LTPROOT" || exit 1
         mkdir -p output results
-        ./bin/ltp-pan -e -S -a $$ -n $$ -f alltests
+        ./bin/ltp-pan -e -S -t 5m -a $$ -n $$ -f alltests
         rc=$?
         echo "[LTP] ltp-pan exit: $rc"
         cd "$TEST_DIR" || exit 1
