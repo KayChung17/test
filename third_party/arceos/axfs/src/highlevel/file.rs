@@ -670,15 +670,39 @@ impl CachedFile {
         let mut page_offset = (range.start % PAGE_SIZE as u64) as usize;
         for pn in start_page..end_page {
             let page_start = pn as u64 * PAGE_SIZE as u64;
+            let slice_end = (range.end - page_start).min(PAGE_SIZE as u64) as usize;
 
+            // Fast path: check cache with lock held
+            {
+                let mut guard = self.shared.page_cache.lock();
+                if guard.contains(&pn) {
+                    let page = guard.get_mut(&pn).unwrap();
+                    initial = page_each(initial, page, page_offset..slice_end)?;
+                    page_offset = 0;
+                    continue;
+                }
+            }
+            // Cache miss: release lock, do disk I/O without holding the lock
+            let mut page = PageCache::new()?;
+            page.data().fill(0);
+            if !self.in_memory {
+                let len = self.shared.logical_len.load(Ordering::Acquire)
+                    .saturating_sub(page_start)
+                    .min(PAGE_SIZE as u64) as usize;
+                if len > 0 {
+                    if let Some(snapshot) = self.shared.dirty_evicted.lock().remove(&pn) {
+                        page.data()[..snapshot.len()].copy_from_slice(&snapshot);
+                        page.dirty = true;
+                    } else {
+                        file.read_at(&mut page.data()[..len], page_start)?;
+                    }
+                }
+            }
+            // Re-acquire lock and insert
             let mut guard = self.shared.page_cache.lock();
-            let page = self.page_or_insert(file, &mut guard, pn)?.0;
-
-            initial = page_each(
-                initial,
-                page,
-                page_offset..(range.end - page_start).min(PAGE_SIZE as u64) as usize,
-            )?;
+            guard.put(pn, page);
+            let page = guard.get_mut(&pn).unwrap();
+            initial = page_each(initial, page, page_offset..slice_end)?;
             page_offset = 0;
         }
 
