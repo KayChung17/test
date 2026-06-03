@@ -115,6 +115,7 @@ for script in $SCRIPTS; do
         echo "[LTP] whitelist lines: $(wc -l < "$LTP_ALLTESTS" 2>/dev/null)"
         cd "$LTPROOT" || exit 1
         mkdir -p output results
+        echo "#### OS COMP TEST GROUP START ltp-glibc ####"
         rc=0
         while IFS= read -r line; do
             case "$line" in ''|'#'*) continue;; esac
@@ -128,6 +129,7 @@ for script in $SCRIPTS; do
             echo "FAIL LTP CASE $tname : $tret"
             [ "$tret" -ne 0 ] && rc=1
         done < "$LTP_ALLTESTS"
+        echo "#### OS COMP TEST GROUP END ltp-glibc ####"
         cd "$TEST_DIR" || exit 1
         rm -f "$LTP_ALLTESTS"
     else
