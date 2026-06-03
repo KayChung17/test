@@ -156,8 +156,10 @@ done >> "$CMD"
 # Optional: suite controls for local testing (empty by default)
 SKIP_FILE="${SKIP_SUITES_FILE:-/dev/null}"
 ONLY_FILE="${ONLY_SUITES_FILE:-/dev/null}"
+ONLY_LTP_CASES_FILE="${ONLY_LTP_CASES_FILE:-/dev/null}"
 echo "write $SKIP_FILE skip_suites" >> "$CMD"
 echo "write $ONLY_FILE only_suites" >> "$CMD"
+echo "write $ONLY_LTP_CASES_FILE only_ltp_cases" >> "$CMD"
 
 debugfs -w "$DST" < "$CMD"
 

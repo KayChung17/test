@@ -5,6 +5,7 @@ export HOME=/
 # Read suite controls from files if present (for local testing)
 [ -f /etc/skip_suites ] && SKIP_SUITES=$(cat /etc/skip_suites)
 [ -f /etc/only_suites ] && ONLY_SUITES=$(cat /etc/only_suites)
+[ -f /etc/only_ltp_cases ] && ONLY_LTP_CASES=$(cat /etc/only_ltp_cases)
 
 TEST_DIR="/oscomp/glibc"
 LTPROOT="$TEST_DIR/ltp"
@@ -99,14 +100,11 @@ for script in $SCRIPTS; do
         # Goal: finish quickly and leave time for later suites.
         LTP_ALLTESTS="$LTPROOT/alltests"
         : > "$LTP_ALLTESTS"
-        for case in \
-            chmod01 chmod03 \
-            access03 chdir01 \
-            accept01 \
-            clock_getres01 clock_nanosleep04 \
-            alarm02 alarm03 alarm06 alarm07 \
-            chown05 chroot03 \
-            abort01
+        LTP_CASES="$ONLY_LTP_CASES"
+        if [ -z "$LTP_CASES" ]; then
+            LTP_CASES="chmod01 chmod03 access03 chdir01 accept01 accept03 clock_getres01 clock_nanosleep04 alarm02 alarm03 alarm06 alarm07 chown05 chroot03 abort01 access01 access02 accept4_01"
+        fi
+        for case in $LTP_CASES
         do
             for scenfile in syscalls fs; do
                 f="$LTPROOT/runtest/$scenfile"
@@ -117,9 +115,19 @@ for script in $SCRIPTS; do
         echo "[LTP] whitelist lines: $(wc -l < "$LTP_ALLTESTS" 2>/dev/null)"
         cd "$LTPROOT" || exit 1
         mkdir -p output results
-        ./bin/ltp-pan -e -S -t 5m -a $$ -n $$ -f alltests
-        rc=$?
-        echo "[LTP] ltp-pan exit: $rc"
+        rc=0
+        while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue;; esac
+            tname=$(printf '%s\n' "$line" | awk '{print $1}')
+            tcmd=$(printf '%s\n' "$line" | cut -d' ' -f2-)
+            [ -z "$tname" ] && continue
+            [ -z "$tcmd" ] && continue
+            echo "RUN LTP CASE $tname"
+            timeout 30 sh -c "$tcmd"
+            tret=$?
+            echo "FAIL LTP CASE $tname : $tret"
+            [ "$tret" -ne 0 ] && rc=1
+        done < "$LTP_ALLTESTS"
         cd "$TEST_DIR" || exit 1
         rm -f "$LTP_ALLTESTS"
     else

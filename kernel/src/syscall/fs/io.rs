@@ -17,10 +17,13 @@ use crate::{
     mm::{IoVec, IoVectorBuf, UserConstPtr, VmBytes, VmBytesMut},
 };
 
-struct DummyFd;
+struct DummyFd(Sysno);
 impl FileLike for DummyFd {
     fn path(&self) -> Cow<'_, str> {
-        "anon_inode:[dummy]".into()
+        match self.0 {
+            Sysno::open_tree => "anon_inode:[open_tree]".into(),
+            _ => "anon_inode:[dummy]".into(),
+        }
     }
 }
 impl Pollable for DummyFd {
@@ -38,7 +41,7 @@ pub fn sys_dummy_fd(sysno: Sysno) -> AxResult<isize> {
         return Err(AxError::Unsupported);
     }
     warn!("Dummy fd created: {sysno}");
-    DummyFd.add_to_fd_table(false).map(|fd| fd as isize)
+    DummyFd(sysno).add_to_fd_table(false).map(|fd| fd as isize)
 }
 
 /// Read data from the file indicated by `fd`.

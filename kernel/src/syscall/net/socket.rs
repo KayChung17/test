@@ -18,7 +18,7 @@ use linux_raw_sys::{
 
 use super::addr::SocketAddrExt;
 use crate::{
-    file::{FileLike, Socket},
+    file::{FileLike, Socket, get_file_like},
     mm::{UserConstPtr, UserPtr},
     task::AsThread,
 };
@@ -119,16 +119,23 @@ pub fn sys_accept4(
 
     let cloexec = flags & O_CLOEXEC != 0;
 
-    // Linux-like precedence for accept03: certain non-socket descriptors (e.g.
-    // O_PATH/open_tree-style fds) should report EBADF rather than ENOTSOCK.
+    // Linux-like precedence for accept03:
+    // - open_tree-style dummy/path fds => EBADF
+    // - O_PATH file fds => EBADF
+    // - ordinary non-socket fds => ENOTSOCK
+    if let Ok(file_like) = get_file_like(fd) {
+        if file_like.path().as_ref() == "anon_inode:[open_tree]" {
+            return Err(AxError::BadFileDescriptor);
+        }
+    }
     if let Ok(file) = crate::file::File::from_fd(fd) {
         if file.flags() & linux_raw_sys::general::O_PATH as u32 != 0 {
             return Err(AxError::BadFileDescriptor);
         }
-        return Err(AxError::BadFileDescriptor);
+        return Err(AxError::NotASocket);
     }
     if crate::file::Directory::from_fd(fd).is_ok() {
-        return Err(AxError::BadFileDescriptor);
+        return Err(AxError::NotASocket);
     }
 
     let socket = Socket::from_fd(fd)?;
