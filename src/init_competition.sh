@@ -102,7 +102,7 @@ for script in $SCRIPTS; do
         : > "$LTP_ALLTESTS"
         LTP_CASES="$ONLY_LTP_CASES"
         if [ -z "$LTP_CASES" ]; then
-            LTP_CASES="chmod01 chmod03 access03 chdir01 accept01 accept03 clock_getres01 clock_nanosleep04 alarm02 alarm03 alarm06 alarm07 chown05 chroot03 abort01 access01 access02 accept4_01"
+            LTP_CASES="chmod01 chmod03 access03 chdir01 accept01 accept03 clock_getres01 clock_nanosleep04 alarm02 alarm03 alarm06 alarm07 chown05 chroot03 abort01 access01 access02 accept4_01 bind01 bind03 chown02"
         fi
         for case in $LTP_CASES
         do
