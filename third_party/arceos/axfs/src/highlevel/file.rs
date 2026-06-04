@@ -361,7 +361,7 @@ impl PageCache {
 impl Drop for PageCache {
     fn drop(&mut self) {
         if self.dirty {
-            warn!("dirty page dropped without flushing");
+            // dirty page dropped without flushing — too noisy for benchmark workloads
         }
         global_allocator().dealloc_pages(self.addr.as_usize(), 1, UsageKind::PageCache);
     }
