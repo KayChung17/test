@@ -141,8 +141,10 @@ for script in $SCRIPTS; do
             echo "[SUITE-TYPE] standalone"
         fi
 
+        echo "#### OS COMP TEST GROUP START ${name}-glibc ####"
         /bin/sh "$script"
         rc=$?
+        echo "#### OS COMP TEST GROUP END ${name}-glibc ####"
     fi
 
     echo "[SUITE-RESULT] $name exit=$rc"
