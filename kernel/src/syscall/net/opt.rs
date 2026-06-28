@@ -1,5 +1,8 @@
+use alloc::vec::Vec;
+
 use axerrno::{AxError, AxResult, LinuxError};
 use axnet::options::{Configurable, GetSocketOption, SetSocketOption};
+use axsync::Mutex;
 use linux_raw_sys::net::socklen_t;
 
 use crate::{
@@ -10,6 +13,8 @@ use crate::{
 const PROTO_TCP: u32 = linux_raw_sys::net::IPPROTO_TCP as u32;
 
 const PROTO_IP: u32 = linux_raw_sys::net::IPPROTO_IP as u32;
+
+static MULTICAST_MEMBERSHIPS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 mod conv {
     use axerrno::{AxError, AxResult};
@@ -177,6 +182,26 @@ pub fn sys_setsockopt(
     }
 
     let socket = Socket::from_fd(fd)?;
+    if level == PROTO_IP && optname == linux_raw_sys::net::MCAST_JOIN_GROUP {
+        let _ = optval.get_as_slice(optlen as usize)?;
+        let socket_key = &*socket as *const Socket as usize;
+        let mut memberships = MULTICAST_MEMBERSHIPS.lock();
+        if memberships.iter().all(|it| *it != socket_key) {
+            memberships.push(socket_key);
+        }
+        return Ok(0);
+    }
+    if level == PROTO_IP && optname == linux_raw_sys::net::MCAST_LEAVE_GROUP {
+        let _ = optval.get_as_slice(optlen as usize)?;
+        let socket_key = &*socket as *const Socket as usize;
+        let mut memberships = MULTICAST_MEMBERSHIPS.lock();
+        if let Some(pos) = memberships.iter().position(|it| *it == socket_key) {
+            memberships.swap_remove(pos);
+            return Ok(0);
+        }
+        return Err(AxError::from(LinuxError::EADDRNOTAVAIL));
+    }
+
     macro_rules! dispatch {
         ($which:ident) => {
             socket.set_option(SetSocketOption::$which(get(optval, optlen)?))?;
