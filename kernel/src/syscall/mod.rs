@@ -542,6 +542,8 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         Sysno::times => sys_times(a0 as _),
         Sysno::clock_gettime => sys_clock_gettime(a0 as _, a1 as _),
         Sysno::clock_getres => sys_clock_getres(a0 as _, a1 as _),
+        Sysno::clock_adjtime => sys_clock_adjtime(a0 as _, a1 as _),
+        Sysno::adjtimex => sys_adjtimex(a0 as _),
         Sysno::getitimer => sys_getitimer(a0 as _, a1 as _),
         Sysno::setitimer => sys_setitimer(a0 as _, a1 as _, a2 as _),
 
