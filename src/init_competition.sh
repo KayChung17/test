@@ -153,19 +153,30 @@ for script in $SCRIPTS; do
         echo "[SUITE-TYPE] standalone"
     fi
 
-    suite_status=$(mktemp "/tmp/${name}.status.XXXXXX") || exit 1
-    rm -f "$suite_status"
     if [ "$name" = "lmbench" ]; then
         export ENOUGH="${ENOUGH:-50000}"
     fi
-    (
-        /bin/sh "$script" 2>&1
-        echo "$?" > "$suite_status"
-    ) | sed \
-        -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
-        -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/"
-    rc=$(cat "$suite_status" 2>/dev/null || echo 1)
-    rm -f "$suite_status"
+    if [ "$name" = "ltp" ]; then
+        suite_status=$(mktemp "/tmp/${name}.status.XXXXXX") || exit 1
+        rm -f "$suite_status"
+        (
+            /bin/sh "$script" 2>&1
+            echo "$?" > "$suite_status"
+        ) | sed \
+            -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
+            -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/"
+        rc=$(cat "$suite_status" 2>/dev/null || echo 1)
+        rm -f "$suite_status"
+    else
+        suite_log=$(mktemp "/tmp/${name}.XXXXXX") || exit 1
+        /bin/sh "$script" >"$suite_log" 2>&1
+        rc=$?
+        sed \
+            -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
+            -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/" \
+            "$suite_log"
+        rm -f "$suite_log"
+    fi
 
     echo "[SUITE-RESULT] $name exit=$rc"
     if [ "$rc" -eq 0 ]; then
