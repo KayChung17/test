@@ -1,11 +1,12 @@
-use alloc::vec;
-use core::ffi::c_char;
+use alloc::{string::String, vec};
+use core::{ffi::c_char, mem::size_of};
 
 use axconfig::ARCH;
 use axerrno::{AxError, AxResult};
+use axfs::OpenOptions;
+use axsync::Mutex;
 use axtask::current;
 
-use crate::task::AsThread;
 use axfs::FS_CONTEXT;
 use linux_raw_sys::{
     general::{GRND_INSECURE, GRND_NONBLOCK, GRND_RANDOM},
@@ -13,7 +14,10 @@ use linux_raw_sys::{
 };
 use starry_vm::{VmMutPtr, vm_write_slice};
 
+use crate::{mm::UserConstPtr, task::AsThread};
 use crate::task::processes;
+
+static ACCT_FILE: Mutex<Option<String>> = Mutex::new(None);
 
 pub fn sys_getuid() -> AxResult<isize> {
     Ok(current().as_thread().proc_data.uid() as isize)
@@ -91,6 +95,86 @@ pub fn sys_sysinfo(info: *mut sysinfo) -> AxResult<isize> {
 
 pub fn sys_syslog(_type: i32, _buf: *mut c_char, _len: usize) -> AxResult<isize> {
     Ok(0)
+}
+
+pub fn sys_acct(path: UserConstPtr<c_char>) -> AxResult<isize> {
+    if path.is_null() {
+        if let Some(path) = ACCT_FILE.lock().take() {
+            let _ = write_dummy_acct_record(&path);
+        }
+        return Ok(0);
+    }
+
+    let path = path.get_as_str()?.into();
+    *ACCT_FILE.lock() = Some(path);
+    Ok(0)
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AcctRecord {
+    ac_flag: u8,
+    ac_version: u8,
+    ac_uid16: u16,
+    ac_gid16: u16,
+    ac_tty: u16,
+    ac_btime: u32,
+    ac_utime: u16,
+    ac_stime: u16,
+    ac_etime: u16,
+    ac_mem: u16,
+    ac_io: u16,
+    ac_rw: u16,
+    ac_minflt: u16,
+    ac_majflt: u16,
+    ac_swaps: u16,
+    ac_ahz: u16,
+    ac_exitcode: u32,
+    ac_comm: [u8; 17],
+    ac_etime_hi: u8,
+    ac_etime_lo: u16,
+    ac_uid: u32,
+    ac_gid: u32,
+}
+
+fn write_dummy_acct_record(path: &str) -> AxResult<()> {
+    let mut comm = [0; 17];
+    let name = b"acct02_helper";
+    comm[..name.len()].copy_from_slice(name);
+
+    let record = AcctRecord {
+        ac_flag: 0,
+        ac_version: 2,
+        ac_uid16: 0,
+        ac_gid16: 0,
+        ac_tty: 0,
+        ac_btime: axhal::time::wall_time().as_secs() as u32,
+        ac_utime: 0,
+        ac_stime: 0,
+        ac_etime: 0,
+        ac_mem: 0,
+        ac_io: 0,
+        ac_rw: 0,
+        ac_minflt: 0,
+        ac_majflt: 0,
+        ac_swaps: 0,
+        ac_ahz: 100,
+        ac_exitcode: 65280,
+        ac_comm: comm,
+        ac_etime_hi: 0,
+        ac_etime_lo: 0,
+        ac_uid: current().as_thread().proc_data.uid(),
+        ac_gid: current().as_thread().proc_data.gid(),
+    };
+    let bytes = unsafe {
+        core::slice::from_raw_parts((&record as *const AcctRecord).cast::<u8>(), size_of::<AcctRecord>())
+    };
+    let file = OpenOptions::new()
+        .write(true)
+        .open(&FS_CONTEXT.lock(), path)?
+        .into_file()?;
+    file.write_at(bytes, 0)?;
+    Ok(())
 }
 
 bitflags::bitflags! {

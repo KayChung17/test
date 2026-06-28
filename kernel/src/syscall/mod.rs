@@ -84,6 +84,7 @@ pub fn handle_syscall(uctx: &mut UserContext) {
         ),
         Sysno::sync => sys_sync(),
         Sysno::syncfs => sys_syncfs(a0 as _),
+        Sysno::acct => sys_acct(a0.into()),
 
         // file ops
         #[cfg(target_arch = "x86_64")]

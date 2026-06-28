@@ -98,6 +98,53 @@ const DUMMY_SCHED_DEBUG: &str = indoc! {"
     init     1         0.000000         0   120         0.000000         0.000000         0.000000
 "};
 
+const PROC_CONFIG: &str = indoc! {"
+    CONFIG_BSD_PROCESS_ACCT=y
+    # CONFIG_BSD_PROCESS_ACCT_V3 is not set
+    CONFIG_NAMESPACES=y
+    CONFIG_USER_NS=y
+    CONFIG_NET_NS=y
+    CONFIG_PID_NS=y
+    CONFIG_MNT_NS=y
+    CONFIG_IPC_NS=y
+    CONFIG_UTS_NS=y
+    CONFIG_CGROUPS=y
+    CONFIG_CGROUP_SCHED=y
+    CONFIG_FAIR_GROUP_SCHED=y
+    CONFIG_CFS_BANDWIDTH=y
+    CONFIG_PACKET=y
+    CONFIG_NET=y
+    CONFIG_INET=y
+    CONFIG_UNIX=y
+    CONFIG_PROC_FS=y
+    CONFIG_SYSFS=y
+    CONFIG_TMPFS=y
+    CONFIG_BPF=y
+    CONFIG_BPF_SYSCALL=y
+    CONFIG_KEYS=y
+    CONFIG_AUDIT=y
+    CONFIG_CHECKPOINT_RESTORE=y
+    CONFIG_FHANDLE=y
+    CONFIG_EPOLL=y
+    CONFIG_SIGNALFD=y
+    CONFIG_TIMERFD=y
+    CONFIG_EVENTFD=y
+    CONFIG_POSIX_TIMERS=y
+    CONFIG_HIGH_RES_TIMERS=y
+    CONFIG_SYSVIPC=y
+    CONFIG_SYSVIPC_SYSCTL=y
+    CONFIG_ELF_CORE=y
+    CONFIG_COREDUMP=y
+    CONFIG_INOTIFY_USER=y
+    CONFIG_FANOTIFY=y
+    CONFIG_MEMCG=y
+    CONFIG_BLK_CGROUP=y
+    CONFIG_CGROUP_PIDS=y
+    CONFIG_CGROUP_CPUACCT=y
+    CONFIG_CGROUP_FREEZER=y
+    CONFIG_CPUSETS=y
+"};
+
 pub fn new_procfs() -> Filesystem {
     SimpleFs::new_with("proc".into(), 0x9fa0, builder)
 }
@@ -420,6 +467,10 @@ fn builder(fs: Arc<SimpleFs>) -> DirMaker {
     root.add(
         "sched_debug",
         SimpleFile::new_regular(fs.clone(), || Ok(DUMMY_SCHED_DEBUG)),
+    );
+    root.add(
+        "config",
+        SimpleFile::new_regular(fs.clone(), || Ok(PROC_CONFIG)),
     );
     root.add(
         "meminfo2",

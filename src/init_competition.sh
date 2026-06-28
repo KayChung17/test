@@ -1,6 +1,7 @@
 #!/bin/sh
 
 export HOME=/
+export KCONFIG_PATH=/proc/config
 
 # Read libc selection from files if present (for local testing)
 [ -f /etc/test_libc ] && TEST_LIBC=$(cat /etc/test_libc)
