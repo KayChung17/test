@@ -216,7 +216,7 @@ pub fn do_exit(exit_code: i32, group_exit: bool) {
     if !head.is_null()
         && let Err(err) = exit_robust_list(head)
     {
-        warn!("exit robust list failed: {err:?}");
+        debug!("exit robust list failed: {err:?}");
     }
 
     let process = &thr.proc_data.proc;
