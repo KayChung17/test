@@ -145,8 +145,10 @@ AR := $(CROSS_COMPILE)ar
 RANLIB := $(CROSS_COMPILE)ranlib
 LD := rust-lld -flavor gnu
 
-OBJDUMP ?= llvm-objdump -d --print-imm-hex --x86-asm-syntax=intel
-OBJCOPY ?= llvm-objcopy --binary-architecture=$(ARCH)
+LLVM_OBJDUMP ?= $(if $(wildcard $(RUST_LLVM_TOOLS_DIR)/llvm-objdump),$(RUST_LLVM_TOOLS_DIR)/llvm-objdump,llvm-objdump)
+LLVM_OBJCOPY ?= $(if $(wildcard $(RUST_LLVM_TOOLS_DIR)/llvm-objcopy),$(RUST_LLVM_TOOLS_DIR)/llvm-objcopy,llvm-objcopy)
+OBJDUMP ?= $(LLVM_OBJDUMP) -d --print-imm-hex --x86-asm-syntax=intel
+OBJCOPY ?= $(LLVM_OBJCOPY) --binary-architecture=$(ARCH)
 GDB ?= gdb
 
 # Paths

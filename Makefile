@@ -8,6 +8,13 @@ export CARGO_NET_OFFLINE := true
 export CARGO_TERM_COLOR := always
 export RUSTUP_OFFLINE := true
 export RUSTUP_TOOLCHAIN := nightly-2025-05-20-x86_64-unknown-linux-gnu
+export RUSTC_HOST := $(shell rustup run $(RUSTUP_TOOLCHAIN) rustc -vV 2>/dev/null | sed -n 's/^host: //p')
+export RUST_SYSROOT := $(shell rustup run $(RUSTUP_TOOLCHAIN) rustc --print sysroot 2>/dev/null)
+export RUST_LLVM_TOOLS_DIR := $(RUST_SYSROOT)/lib/rustlib/$(RUSTC_HOST)/bin
+
+ifneq ($(wildcard $(RUST_LLVM_TOOLS_DIR)/llvm-objcopy),)
+export PATH := $(RUST_LLVM_TOOLS_DIR):$(PATH)
+endif
 
 # QEMU Options
 export BLK := y
