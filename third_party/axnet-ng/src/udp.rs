@@ -226,12 +226,15 @@ impl SocketOps for UdpSocket {
         }
 
         enum ExpectedRemote<'a> {
-            Any(&'a mut SocketAddrEx),
+            Any(Option<&'a mut SocketAddrEx>),
             Expecting(IpEndpoint),
         }
         let mut expected_remote = match options.from {
-            Some(addr) => ExpectedRemote::Any(addr),
-            None => ExpectedRemote::Expecting(self.remote_endpoint()?.0),
+            Some(addr) => ExpectedRemote::Any(Some(addr)),
+            None => match *self.peer_addr.read() {
+                Some((endpoint, _)) => ExpectedRemote::Expecting(endpoint),
+                None => ExpectedRemote::Any(None),
+            },
         };
 
         self.general.recv_poller(self, || {
@@ -252,7 +255,9 @@ impl SocketOps for UdpSocket {
                         Ok((src, meta)) => {
                             match &mut expected_remote {
                                 ExpectedRemote::Any(remote_addr) => {
-                                    **remote_addr = SocketAddrEx::Ip(meta.endpoint.into());
+                                    if let Some(remote_addr) = remote_addr {
+                                        **remote_addr = SocketAddrEx::Ip(meta.endpoint.into());
+                                    }
                                 }
                                 ExpectedRemote::Expecting(expected) => {
                                     if (!expected.addr.is_unspecified()

@@ -69,6 +69,13 @@ pub fn sys_bind(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxResult
     let addr = SocketAddrEx::read_from_user(addr, addrlen)?;
     debug!("sys_bind <= fd: {fd}, addr: {addr:?}");
 
+    if let SocketAddrEx::Ip(ip_addr) = &addr
+        && ip_addr.port() < 1024
+        && current().as_thread().proc_data.uid() != 0
+    {
+        return Err(AxError::from(LinuxError::EACCES));
+    }
+
     Socket::from_fd(fd)?.bind(addr)?;
 
     Ok(0)
