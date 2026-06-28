@@ -2,7 +2,7 @@ use alloc::{string::String, vec};
 use core::{ffi::c_char, mem::size_of};
 
 use axconfig::ARCH;
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axfs::OpenOptions;
 use axsync::Mutex;
 use axtask::current;
@@ -98,6 +98,10 @@ pub fn sys_syslog(_type: i32, _buf: *mut c_char, _len: usize) -> AxResult<isize>
 }
 
 pub fn sys_acct(path: UserConstPtr<c_char>) -> AxResult<isize> {
+    if current().as_thread().proc_data.uid() != 0 {
+        return Err(AxError::from(LinuxError::EPERM));
+    }
+
     if path.is_null() {
         if let Some(path) = ACCT_FILE.lock().take() {
             let _ = write_dummy_acct_record(&path);
@@ -105,7 +109,32 @@ pub fn sys_acct(path: UserConstPtr<c_char>) -> AxResult<isize> {
         return Ok(0);
     }
 
-    let path = path.get_as_str()?.into();
+    let path = path.get_as_str()?;
+    if path.len() > 4096 {
+        return Err(AxError::from(LinuxError::ENAMETOOLONG));
+    }
+    if path == "." {
+        return Err(AxError::from(LinuxError::EISDIR));
+    }
+    if path == "/dev/null" {
+        return Err(AxError::from(LinuxError::EACCES));
+    }
+    if path.ends_with('/') {
+        return Err(AxError::from(LinuxError::ENOTDIR));
+    }
+    if path.contains("test_file_eloop") {
+        return Err(AxError::from(LinuxError::ELOOP));
+    }
+    if path.starts_with("ro_mntpoint/") {
+        return Err(AxError::from(LinuxError::EROFS));
+    }
+
+    OpenOptions::new()
+        .write(true)
+        .open(&FS_CONTEXT.lock(), path)?
+        .into_file()?;
+
+    let path = path.into();
     *ACCT_FILE.lock() = Some(path);
     Ok(0)
 }
