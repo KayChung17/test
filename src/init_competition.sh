@@ -22,10 +22,25 @@ fi
 echo "=== Starry OS Competition Mode ==="
 echo "Test dir: $TEST_DIR"
 
+mkdir -p /etc
+if [ ! -f /etc/passwd ]; then
+    echo "root:x:0:0:root:/root:/bin/sh" > /etc/passwd
+fi
+if ! grep -q '^nobody:' /etc/passwd 2>/dev/null; then
+    echo "nobody:x:65534:65534:nobody:/:" >> /etc/passwd
+fi
+if [ ! -f /etc/group ]; then
+    echo "root:x:0:" > /etc/group
+fi
+if ! grep -q '^nobody:' /etc/group 2>/dev/null; then
+    echo "nobody:x:65534:" >> /etc/group
+fi
+
 # ---- dynamic linker setup ----
 LIBC_LIB="$TEST_DIR/lib"
+export LD_LIBRARY_PATH="$LIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [ "$TEST_LIBC" = "glibc" ]; then
-    mkdir -p /lib64
+    mkdir -p /lib /lib64
     for loader in \
         ld-linux-riscv64-lp64d.so.1 \
         ld-linux-loongarch-lp64d.so.1
@@ -35,10 +50,16 @@ if [ "$TEST_LIBC" = "glibc" ]; then
             ln -sf "$LIBC_LIB/$loader" "/lib64/$loader"
         fi
     done
-    [ -f "$LIBC_LIB/libc.so.6" ] && ln -sf "$LIBC_LIB/libc.so.6" /lib/
-    [ -f "$LIBC_LIB/libm.so.6" ] && ln -sf "$LIBC_LIB/libm.so.6" /lib/
+    if [ -f "$LIBC_LIB/libc.so.6" ]; then
+        ln -sf "$LIBC_LIB/libc.so.6" /lib/
+        ln -sf "$LIBC_LIB/libc.so.6" /lib64/
+    fi
+    if [ -f "$LIBC_LIB/libm.so.6" ]; then
+        ln -sf "$LIBC_LIB/libm.so.6" /lib/
+        ln -sf "$LIBC_LIB/libm.so.6" /lib64/
+    fi
 else
-    mkdir -p /lib64
+    mkdir -p /lib /lib64
     for loader in \
         ld-linux-riscv64-lp64d.so.1 \
         ld-linux-loongarch-lp64d.so.1
