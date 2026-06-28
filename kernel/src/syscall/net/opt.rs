@@ -182,6 +182,11 @@ pub fn sys_setsockopt(
     }
 
     let socket = Socket::from_fd(fd)?;
+    if level == linux_raw_sys::net::SOL_SOCKET && optname == linux_raw_sys::net::SO_ATTACH_BPF {
+        let prog_fd = *get::<i32>(optval, optlen)?;
+        super::super::run_bpf_socket_filter(prog_fd)?;
+        return Ok(0);
+    }
     if level == PROTO_IP && optname == linux_raw_sys::net::MCAST_JOIN_GROUP {
         let _ = optval.get_as_slice(optlen as usize)?;
         let socket_key = &*socket as *const Socket as usize;
