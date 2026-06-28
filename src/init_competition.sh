@@ -38,8 +38,8 @@ fi
 
 # ---- dynamic linker setup ----
 LIBC_LIB="$TEST_DIR/lib"
-export LD_LIBRARY_PATH="$LIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [ "$TEST_LIBC" = "glibc" ]; then
+    export LD_LIBRARY_PATH="$LIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     mkdir -p /lib /lib64
     for loader in \
         ld-linux-riscv64-lp64d.so.1 \
@@ -62,15 +62,26 @@ else
     mkdir -p /lib /lib64
     for loader in \
         ld-musl-riscv64.so.1 \
-        ld-musl-loongarch-lp64d.so.1 \
-        ld-linux-riscv64-lp64d.so.1 \
-        ld-linux-loongarch-lp64d.so.1
+        ld-musl-loongarch-lp64d.so.1
     do
-        ln -sf "$LIBC_LIB/libc.so" "/lib/$loader"
-        ln -sf "$LIBC_LIB/libc.so" "/lib64/$loader"
+        if [ -f "$LIBC_LIB/$loader" ]; then
+            loader_target="$LIBC_LIB/$loader"
+        elif [ -f "$LIBC_LIB/libc.so" ]; then
+            loader_target="$LIBC_LIB/libc.so"
+        else
+            continue
+        fi
+        [ -e "/lib/$loader" ] || ln -sf "$loader_target" "/lib/$loader"
+        [ -e "/lib64/$loader" ] || ln -sf "$loader_target" "/lib64/$loader"
     done
     ln -sf "$LIBC_LIB/libc.so" /lib/libc.so
 fi
+for lib in "$LIBC_LIB"/*.so*; do
+    [ -f "$lib" ] || continue
+    base="${lib##*/}"
+    ln -sf "$lib" "/lib/$base"
+    ln -sf "$lib" "/lib64/$base"
+done
 
 # The rv test image keeps lmbench wrappers built with an absolute path under
 # /code/lmbench_src/bin/build.  Mirror that path to the mounted test payload so
@@ -210,6 +221,9 @@ for script in $SCRIPTS; do
             rc=$?
             cd "$TEST_DIR" || exit 1
         else
+            if [ "$name" = "lmbench" ]; then
+                export ENOUGH="${ENOUGH:-50000}"
+            fi
             /bin/sh "$script" >"$suite_log" 2>&1
             rc=$?
         fi
