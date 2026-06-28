@@ -2,7 +2,7 @@ use core::ffi::{c_char, c_int};
 
 use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
-use axfs_ng_vfs::{Location, NodePermission};
+use axfs_ng_vfs::Location;
 use linux_raw_sys::general::{
     __kernel_fsid_t, AT_EMPTY_PATH, R_OK, W_OK, X_OK, stat, statfs, statx,
 };
@@ -111,37 +111,77 @@ pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) 
     debug!("sys_faccessat2 <= dirfd: {dirfd}, path: {path:?}, mode: {mode}, flags: {flags}");
 
     let file = resolve_at(dirfd, path.as_deref(), flags)?;
+    let stat = file.stat()?;
+    let loc = file.into_file();
+    let curr = axtask::current();
+    let uid = curr.as_thread().proc_data.uid();
+    let gid = curr.as_thread().proc_data.gid();
+
+    if let Some(loc) = loc {
+        check_search_permission(&loc, uid, gid)?;
+    }
 
     if mode == 0 {
         return Ok(0);
     }
 
-    let stat = file.stat()?;
-    let curr = axtask::current();
-    let uid = curr.as_thread().proc_data.uid();
-    let gid = curr.as_thread().proc_data.gid();
-    let perm = stat.mode as u16;
-
-    let (read_ok, write_ok, exec_ok) = if uid == 0 {
-        // Linux-like root semantics: read/write bypass DAC; execute requires some exec bit.
-        let exec_any = (perm & 0o111) != 0;
-        (true, true, exec_any)
-    } else if uid == stat.uid {
-        ((perm & 0o400) != 0, (perm & 0o200) != 0, (perm & 0o100) != 0)
-    } else if gid == stat.gid {
-        ((perm & 0o040) != 0, (perm & 0o020) != 0, (perm & 0o010) != 0)
-    } else {
-        ((perm & 0o004) != 0, (perm & 0o002) != 0, (perm & 0o001) != 0)
-    };
-
-    if (mode & R_OK != 0 && !read_ok)
-        || (mode & W_OK != 0 && !write_ok)
-        || (mode & X_OK != 0 && !exec_ok)
-    {
+    if !has_permission(stat.mode as u16, stat.uid, stat.gid, uid, gid, mode) {
         return Err(AxError::PermissionDenied);
     }
 
     Ok(0)
+}
+
+fn has_permission(perm: u16, owner: u32, group: u32, uid: u32, gid: u32, mode: u32) -> bool {
+    let (read_ok, write_ok, exec_ok) = if uid == 0 {
+        // Linux-like root semantics: read/write bypass DAC; execute requires some exec bit.
+        (true, true, (perm & 0o111) != 0)
+    } else if uid == owner {
+        (
+            (perm & 0o400) != 0,
+            (perm & 0o200) != 0,
+            (perm & 0o100) != 0,
+        )
+    } else if gid == group {
+        (
+            (perm & 0o040) != 0,
+            (perm & 0o020) != 0,
+            (perm & 0o010) != 0,
+        )
+    } else {
+        (
+            (perm & 0o004) != 0,
+            (perm & 0o002) != 0,
+            (perm & 0o001) != 0,
+        )
+    };
+
+    (mode & R_OK == 0 || read_ok)
+        && (mode & W_OK == 0 || write_ok)
+        && (mode & X_OK == 0 || exec_ok)
+}
+
+fn check_search_permission(loc: &Location, uid: u32, gid: u32) -> AxResult {
+    if uid == 0 {
+        return Ok(());
+    }
+
+    let mut dir = loc.parent();
+    while let Some(current) = dir {
+        let metadata = current.metadata()?;
+        if !has_permission(
+            metadata.mode.bits() as u16,
+            metadata.uid,
+            metadata.gid,
+            uid,
+            gid,
+            X_OK,
+        ) {
+            return Err(AxError::PermissionDenied);
+        }
+        dir = current.parent();
+    }
+    Ok(())
 }
 
 fn statfs(loc: &Location) -> AxResult<statfs> {

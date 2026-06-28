@@ -5,7 +5,7 @@ use core::{
     task::Context,
 };
 
-use axerrno::{AxError, AxResult, ax_bail, ax_err_type};
+use axerrno::{AxError, AxResult, LinuxError, ax_bail, ax_err_type};
 use axio::prelude::*;
 use axpoll::{IoEvents, PollSet, Pollable};
 use axsync::Mutex;
@@ -220,6 +220,9 @@ impl SocketOps for TcpSocket {
                 // TODO: check addr is available
                 if local_addr.port() == 0 {
                     local_addr.set_port(get_ephemeral_port()?);
+                }
+                if !get_service().can_bind_address(local_addr.ip().into()) {
+                    return Err(AxError::from(LinuxError::EADDRNOTAVAIL));
                 }
                 if !self.general.reuse_address() {
                     SOCKET_SET.bind_check(local_addr.ip().into(), local_addr.port())?;

@@ -4,7 +4,7 @@ use core::{
     task::Context,
 };
 
-use axerrno::{AxError, AxResult, ax_bail, ax_err_type};
+use axerrno::{AxError, AxResult, LinuxError, ax_bail, ax_err_type};
 use axio::prelude::*;
 use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
@@ -122,6 +122,9 @@ impl SocketOps for UdpSocket {
         }
         if guard.is_some() {
             ax_bail!(InvalidInput, "already bound");
+        }
+        if !get_service().can_bind_address(local_addr.ip().into()) {
+            return Err(AxError::from(LinuxError::EADDRNOTAVAIL));
         }
 
         let local_endpoint = IpEndpoint::from(local_addr);
