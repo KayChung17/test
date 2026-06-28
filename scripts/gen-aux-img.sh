@@ -2,8 +2,8 @@
 # Generate minimal auxiliary rootfs image from a source ext4 image.
 # Usage: ./scripts/gen-aux-img.sh <source_img> <output_img> [size_mb]
 #
-# Extracts RISC-V busybox + musl libc + /etc from the source and
-# creates a bootable ext4 auxiliary rootfs.
+# Extracts busybox + musl loader + /etc from the source and creates a
+# bootable ext4 auxiliary rootfs.
 
 set -e
 
@@ -30,19 +30,47 @@ if [ "$MODE" = dir ]; then
     SRC_DIR=$(realpath "$SRC_DIR")
     echo "Copying files from $SRC_DIR ..."
     cp "$SRC_DIR/bin/busybox" "$TMPDIR/busybox"
-    cp "$SRC_DIR/lib/ld-musl-riscv64.so.1" "$TMPDIR/ld-musl-riscv64.so.1"
+    LOADER=""
+    for candidate in ld-musl-riscv64.so.1 ld-musl-loongarch64.so.1; do
+        if [ -f "$SRC_DIR/lib/$candidate" ]; then
+            LOADER="$candidate"
+            cp "$SRC_DIR/lib/$candidate" "$TMPDIR/$candidate"
+            break
+        fi
+    done
     for f in passwd group hostname inittab fstab inputrc; do
         [ -f "$SRC_DIR/etc/$f" ] && cp "$SRC_DIR/etc/$f" "$TMPDIR/$f"
     done
 else
     SRC=$(realpath "$SRC")
     echo "Extracting files from $SRC ..."
-    debugfs -R "dump /bin/busybox              $TMPDIR/busybox"              "$SRC"
-    debugfs -R "dump /lib/ld-musl-riscv64.so.1 $TMPDIR/ld-musl-riscv64.so.1" "$SRC"
+    BUSYBOX=""
+    for candidate in /bin/busybox /musl/busybox /glibc/busybox; do
+        rm -f "$TMPDIR/busybox"
+        if debugfs -R "dump $candidate $TMPDIR/busybox" "$SRC" >/dev/null 2>&1 && [ -s "$TMPDIR/busybox" ]; then
+            BUSYBOX="$candidate"
+            break
+        fi
+    done
+    if [ -z "$BUSYBOX" ]; then
+        echo "Missing busybox in $SRC" >&2
+        exit 1
+    fi
+    LOADER=""
+    for candidate in ld-musl-riscv64.so.1 ld-musl-loongarch64.so.1; do
+        rm -f "$TMPDIR/$candidate"
+        if debugfs -R "dump /lib/$candidate $TMPDIR/$candidate" "$SRC" >/dev/null 2>&1 && [ -s "$TMPDIR/$candidate" ]; then
+            LOADER="$candidate"
+            break
+        fi
+    done
     for f in passwd group hostname inittab fstab inputrc; do
         debugfs -R "dump /etc/$f $TMPDIR/$f" "$SRC" 2>/dev/null || true
     done
 fi
+
+[ -f "$TMPDIR/passwd" ] || printf 'root:x:0:0:root:/root:/bin/sh\n' > "$TMPDIR/passwd"
+[ -f "$TMPDIR/group" ] || printf 'root:x:0:\n' > "$TMPDIR/group"
 
 echo "Creating empty ext4 image ($SIZE MB)..."
 truncate -s "${SIZE}M" "$DST"
@@ -140,10 +168,24 @@ ln busybox tr
 ln busybox timeout
 
 cd /lib
-write ld-musl-riscv64.so.1 ld-musl-riscv64.so.1
-set_inode_field ld-musl-riscv64.so.1 mode 0100755
-ln ld-musl-riscv64.so.1 libc.musl-riscv64.so.1
+HEADER
 
+{
+    if [ -n "$LOADER" ]; then
+        echo "write $LOADER $LOADER"
+        echo "set_inode_field $LOADER mode 0100755"
+        case "$LOADER" in
+            ld-musl-riscv64.so.1)
+                echo "ln $LOADER libc.musl-riscv64.so.1"
+                ;;
+            ld-musl-loongarch64.so.1)
+                echo "ln $LOADER libc.musl-loongarch64.so.1"
+                ;;
+        esac
+    fi
+} >> "$CMD"
+
+cat >> "$CMD" <<'HEADER'
 cd /etc
 write passwd passwd
 write group group

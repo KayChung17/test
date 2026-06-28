@@ -58,7 +58,7 @@ rootfs:
 	elif [ -f $(ROOTFS_IMG) ]; then \
 		cp $(ROOTFS_IMG) make/disk.img; \
 		echo "Rootfs ready: make/disk.img"; \
-	elif [ -f $(ROOTFS_SOURCE_DIR)/bin/busybox ] && [ -f $(ROOTFS_SOURCE_DIR)/lib/ld-musl-riscv64.so.1 ] && [ -f $(ROOTFS_SOURCE_DIR)/etc/passwd ] && [ -f $(ROOTFS_SOURCE_DIR)/etc/group ]; then \
+	elif [ -f $(ROOTFS_SOURCE_DIR)/bin/busybox ] && ls $(ROOTFS_SOURCE_DIR)/lib/ld-musl-*.so.1 >/dev/null 2>&1 && [ -f $(ROOTFS_SOURCE_DIR)/etc/passwd ] && [ -f $(ROOTFS_SOURCE_DIR)/etc/group ]; then \
 		echo "Generating auxiliary rootfs from $(ROOTFS_SOURCE_DIR) ..."; \
 		scripts/gen-aux-img.sh --from-dir "$(ROOTFS_SOURCE_DIR)" make/disk.img $(ROOTFS_SIZE_MB); \
 		echo "Auxiliary rootfs ready: make/disk.img"; \

@@ -25,11 +25,27 @@ echo "Test dir: $TEST_DIR"
 # ---- dynamic linker setup ----
 LIBC_LIB="$TEST_DIR/lib"
 if [ "$TEST_LIBC" = "glibc" ]; then
-    ln -sf "$LIBC_LIB/ld-linux-riscv64-lp64d.so.1" /lib/
-    ln -sf "$LIBC_LIB/libc.so.6" /lib/
-    ln -sf "$LIBC_LIB/libm.so.6" /lib/
+    mkdir -p /lib64
+    for loader in \
+        ld-linux-riscv64-lp64d.so.1 \
+        ld-linux-loongarch-lp64d.so.1
+    do
+        if [ -f "$LIBC_LIB/$loader" ]; then
+            ln -sf "$LIBC_LIB/$loader" "/lib/$loader"
+            ln -sf "$LIBC_LIB/$loader" "/lib64/$loader"
+        fi
+    done
+    [ -f "$LIBC_LIB/libc.so.6" ] && ln -sf "$LIBC_LIB/libc.so.6" /lib/
+    [ -f "$LIBC_LIB/libm.so.6" ] && ln -sf "$LIBC_LIB/libm.so.6" /lib/
 else
-    ln -sf "$LIBC_LIB/libc.so" /lib/ld-linux-riscv64-lp64d.so.1
+    mkdir -p /lib64
+    for loader in \
+        ld-linux-riscv64-lp64d.so.1 \
+        ld-linux-loongarch-lp64d.so.1
+    do
+        ln -sf "$LIBC_LIB/libc.so" "/lib/$loader"
+        ln -sf "$LIBC_LIB/libc.so" "/lib64/$loader"
+    done
     ln -sf "$LIBC_LIB/libc.so" /lib/libc.so
 fi
 
