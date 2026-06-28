@@ -9,7 +9,11 @@ set(CMAKE_SYSTEM_NAME "Linux")
 set(CMAKE_SYSTEM_PROCESSOR ${ARCH})
 
 # Toolchain settings
-set(TOOLCHAIN_PREFIX ${ARCH}-linux-musl)
+if(DEFINED ENV{LWEXT4_TOOLCHAIN_PREFIX})
+    set(TOOLCHAIN_PREFIX $ENV{LWEXT4_TOOLCHAIN_PREFIX})
+else()
+    set(TOOLCHAIN_PREFIX ${ARCH}-linux-musl)
+endif()
 
 set(CMAKE_C_COMPILER    ${TOOLCHAIN_PREFIX}-cc)
 set(CMAKE_CXX_COMPILER  ${TOOLCHAIN_PREFIX}-c++)
@@ -39,8 +43,8 @@ elseif (ARCH STREQUAL "loongarch64")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msoft-float")
 endif()
 
-set(CMAKE_C_FLAGS "-fPIC -fno-builtin -ffreestanding -fno-omit-frame-pointer ${CMAKE_C_FLAGS}")
-set(CMAKE_CXX_FLAGS "-fPIC -nostdinc -fno-builtin -ffreestanding -fno-omit-frame-pointer ${CMAKE_CXX_FLAGS}")
+set(CMAKE_C_FLAGS "-fPIC -fno-builtin -ffreestanding -fno-omit-frame-pointer -fno-stack-protector ${CMAKE_C_FLAGS}")
+set(CMAKE_CXX_FLAGS "-fPIC -nostdinc -fno-builtin -ffreestanding -fno-omit-frame-pointer -fno-stack-protector ${CMAKE_CXX_FLAGS}")
 
 if (APPLE)
     set(CMAKE_EXE_LINKER_FLAGS "-dead_strip" CACHE INTERNAL "exe link flags")
