@@ -26,6 +26,15 @@ ln -sf "$GLIBC_LIB/ld-linux-riscv64-lp64d.so.1" /lib/
 ln -sf "$GLIBC_LIB/libc.so.6" /lib/
 ln -sf "$GLIBC_LIB/libm.so.6" /lib/
 
+# The rv test image keeps lmbench wrappers built with an absolute path under
+# /code/lmbench_src/bin/build.  Mirror that path to the mounted test payload so
+# lat_proc shell and direct wrapper invocations exercise the benchmark instead
+# of failing with ENOENT.
+if [ -x "$TEST_DIR/lmbench_all" ]; then
+    mkdir -p /code/lmbench_src/bin/build
+    ln -sf "$TEST_DIR/lmbench_all" /code/lmbench_src/bin/build/lmbench_all
+fi
+
 cd "$TEST_DIR"
 
 # Avoid pager pauses during verbose test output.

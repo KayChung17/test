@@ -67,12 +67,18 @@ int strncmp(const char *_l, const char *_r, size_t n)
 
 // fix me
 __attribute__((weak)) 
-FILE *const stdout = NULL;
+FILE *stdout = NULL;
 
 __attribute__((weak)) 
 int fflush(FILE *f)
 {
         // printf("fflush() is not implemented !\n");
+        return 0;
+}
+
+__attribute__((weak))
+int __printf_chk(int flag, const char *format, ...)
+{
         return 0;
 }
 
