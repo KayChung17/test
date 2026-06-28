@@ -140,6 +140,40 @@ is_directory_scan() {
     [ -d "./$dir" ] && [ -f "./$dir/run-all.sh" ]
 }
 
+run_ltp_all_cases() {
+    local target_dir="ltp/testcases/bin"
+    local case_timeout="${LTP_CASE_TIMEOUT:-5}"
+    local file base ret
+
+    echo "#### OS COMP TEST GROUP START ltp-$TEST_LIBC ####"
+    echo "[LTP] target_dir=$target_dir case_timeout=${case_timeout}s"
+
+    for file in "$target_dir"/*; do
+        [ -f "$file" ] || continue
+        base="${file##*/}"
+        echo "RUN LTP CASE $base"
+
+        if command -v timeout >/dev/null 2>&1; then
+            timeout "$case_timeout" "$file"
+            ret=$?
+        elif [ -x /bin/busybox ]; then
+            /bin/busybox timeout "$case_timeout" "$file"
+            ret=$?
+        else
+            "$file"
+            ret=$?
+        fi
+
+        if [ "$ret" -eq 124 ] || [ "$ret" -eq 137 ] || [ "$ret" -eq 143 ]; then
+            echo "[LTP-CASE-TIMEOUT] $base after ${case_timeout}s"
+        fi
+        echo "FAIL LTP CASE $base : $ret"
+    done
+
+    echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
+    return 0
+}
+
 for script in $SCRIPTS; do
     name="${script%_testcode.sh}"
     echo "[SUITE-BEGIN] $name"
@@ -157,16 +191,8 @@ for script in $SCRIPTS; do
         export ENOUGH="${ENOUGH:-50000}"
     fi
     if [ "$name" = "ltp" ]; then
-        suite_status=$(mktemp "/tmp/${name}.status.XXXXXX") || exit 1
-        rm -f "$suite_status"
-        (
-            /bin/sh "$script" 2>&1
-            echo "$?" > "$suite_status"
-        ) | sed \
-            -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
-            -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/"
-        rc=$(cat "$suite_status" 2>/dev/null || echo 1)
-        rm -f "$suite_status"
+        run_ltp_all_cases 2>&1
+        rc=$?
     else
         suite_log=$(mktemp "/tmp/${name}.XXXXXX") || exit 1
         /bin/sh "$script" >"$suite_log" 2>&1
