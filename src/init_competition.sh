@@ -6,8 +6,10 @@ export HOME=/
 [ -f /etc/skip_suites ] && SKIP_SUITES=$(cat /etc/skip_suites)
 [ -f /etc/only_suites ] && ONLY_SUITES=$(cat /etc/only_suites)
 [ -f /etc/only_ltp_cases ] && ONLY_LTP_CASES=$(cat /etc/only_ltp_cases)
+[ -f /etc/test_libc ] && TEST_LIBC=$(cat /etc/test_libc)
 
-TEST_DIR="/oscomp/glibc"
+TEST_LIBC="${TEST_LIBC:-glibc}"
+TEST_DIR="/oscomp/$TEST_LIBC"
 LTPROOT="$TEST_DIR/ltp"
 
 if [ ! -d "$TEST_DIR" ]; then
@@ -20,11 +22,16 @@ fi
 echo "=== Starry OS Competition Mode ==="
 echo "Test dir: $TEST_DIR"
 
-# ---- glibc dynamic linker setup ----
-GLIBC_LIB="$TEST_DIR/lib"
-ln -sf "$GLIBC_LIB/ld-linux-riscv64-lp64d.so.1" /lib/
-ln -sf "$GLIBC_LIB/libc.so.6" /lib/
-ln -sf "$GLIBC_LIB/libm.so.6" /lib/
+# ---- dynamic linker setup ----
+LIBC_LIB="$TEST_DIR/lib"
+if [ "$TEST_LIBC" = "glibc" ]; then
+    ln -sf "$LIBC_LIB/ld-linux-riscv64-lp64d.so.1" /lib/
+    ln -sf "$LIBC_LIB/libc.so.6" /lib/
+    ln -sf "$LIBC_LIB/libm.so.6" /lib/
+else
+    ln -sf "$LIBC_LIB/libc.so" /lib/ld-linux-riscv64-lp64d.so.1
+    ln -sf "$LIBC_LIB/libc.so" /lib/libc.so
+fi
 
 # The rv test image keeps lmbench wrappers built with an absolute path under
 # /code/lmbench_src/bin/build.  Mirror that path to the mounted test payload so
@@ -44,6 +51,9 @@ export TERM=dumb
 
 # ---- scan for test entry points ----
 SCRIPTS=$(ls *_testcode.sh 2>/dev/null | sort)
+if [ -d ./basic ] && [ -f ./basic/run-all.sh ] && ! echo "$SCRIPTS" | grep -q '^basic_testcode.sh$'; then
+    SCRIPTS="basic_testcode.sh $SCRIPTS"
+fi
 
 if [ -z "$SCRIPTS" ]; then
     echo "[SUMMARY] no testcode scripts found in $TEST_DIR"
@@ -70,11 +80,15 @@ is_directory_scan() {
     # directory-scan: has a subdirectory with its own run-all.sh
     # (basic/, ltp/, etc.)
     local dir="$1"
-    [ -d "./$dir" ] && [ -x "./$dir/run-all.sh" ]
+    [ -d "./$dir" ] && [ -f "./$dir/run-all.sh" ]
 }
 
 for script in $SCRIPTS; do
     name="${script%_testcode.sh}"
+    synthetic_basic=0
+    if [ "$name" = "basic" ] && [ ! -e "$script" ] && [ -f ./basic/run-all.sh ]; then
+        synthetic_basic=1
+    fi
     echo "[SUITE-BEGIN] $name"
 
     # Local testing helper: if ONLY_SUITES is set, run only the listed suites.
@@ -93,7 +107,7 @@ for script in $SCRIPTS; do
         continue
     fi
 
-    if [ ! -x "$script" ]; then
+    if [ "$synthetic_basic" -eq 0 ] && [ ! -x "$script" ]; then
         echo "[SUITE-SKIP] $name (not executable)"
         SUITE_SKIP=$((SUITE_SKIP + 1))
         echo "[SUITE-END] $name"
@@ -124,7 +138,7 @@ for script in $SCRIPTS; do
         echo "[LTP] whitelist lines: $(wc -l < "$LTP_ALLTESTS" 2>/dev/null)"
         cd "$LTPROOT" || exit 1
         mkdir -p output results
-        echo "#### OS COMP TEST GROUP START ltp-glibc ####"
+        echo "#### OS COMP TEST GROUP START ltp-$TEST_LIBC ####"
         rc=0
         while IFS= read -r line; do
             case "$line" in ''|'#'*) continue;; esac
@@ -138,7 +152,7 @@ for script in $SCRIPTS; do
             echo "FAIL LTP CASE $tname : $tret"
             [ "$tret" -ne 0 ] && rc=1
         done < "$LTP_ALLTESTS"
-        echo "#### OS COMP TEST GROUP END ltp-glibc ####"
+        echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
         cd "$TEST_DIR" || exit 1
         rm -f "$LTP_ALLTESTS"
     else
@@ -150,10 +164,17 @@ for script in $SCRIPTS; do
             echo "[SUITE-TYPE] standalone"
         fi
 
-        echo "#### OS COMP TEST GROUP START ${name}-glibc ####"
-        /bin/sh "$script"
-        rc=$?
-        echo "#### OS COMP TEST GROUP END ${name}-glibc ####"
+        echo "#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####"
+        if [ "$synthetic_basic" -eq 1 ]; then
+            cd ./basic || exit 1
+            /bin/sh ./run-all.sh
+            rc=$?
+            cd "$TEST_DIR" || exit 1
+        else
+            /bin/sh "$script"
+            rc=$?
+        fi
+        echo "#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####"
     fi
 
     echo "[SUITE-RESULT] $name exit=$rc"
