@@ -1,6 +1,6 @@
 use core::ffi::c_char;
 
-use axerrno::{AxError, AxResult};
+use axerrno::{AxError, AxResult, LinuxError};
 use axtask::current;
 use linux_raw_sys::general::{__user_cap_data_struct, __user_cap_header_struct};
 use starry_vm::{VmMutPtr, VmPtr, vm_write_slice};
@@ -10,39 +10,90 @@ use crate::{
     task::{AsThread, get_process_data},
 };
 
+const CAPABILITY_VERSION_1: u32 = 0x19980330;
+const CAPABILITY_VERSION_2: u32 = 0x20071026;
 const CAPABILITY_VERSION_3: u32 = 0x20080522;
+const CAP_CHOWN: u32 = 0;
+const CAP_KILL: u32 = 5;
+const CAP_SETPCAP: u32 = 8;
+const CAP_NET_RAW: u32 = 13;
+const CAP1: u32 = (1 << CAP_CHOWN) | (1 << CAP_NET_RAW) | (1 << CAP_SETPCAP);
+const CAP_KILL_MASK: u32 = 1 << CAP_KILL;
 
-fn validate_cap_header(header_ptr: *mut __user_cap_header_struct) -> AxResult<()> {
+fn cap_words(version: u32) -> Option<usize> {
+    match version {
+        CAPABILITY_VERSION_1 => Some(1),
+        CAPABILITY_VERSION_2 | CAPABILITY_VERSION_3 => Some(2),
+        _ => None,
+    }
+}
+
+fn validate_cap_header(header_ptr: *mut __user_cap_header_struct) -> AxResult<(i32, usize)> {
     // FIXME: AnyBitPattern
     let mut header = unsafe { header_ptr.vm_read_uninit()?.assume_init() };
-    if header.version != CAPABILITY_VERSION_3 {
+    let Some(words) = cap_words(header.version) else {
         header.version = CAPABILITY_VERSION_3;
         header_ptr.vm_write(header)?;
         return Err(AxError::InvalidInput);
+    };
+
+    if header.pid < 0 {
+        return Err(AxError::InvalidInput);
     }
-    let _ = get_process_data(header.pid as u32)?;
-    Ok(())
+
+    if header.pid != 0 {
+        let _ = get_process_data(header.pid as u32)?;
+    }
+
+    Ok((header.pid, words))
 }
 
 pub fn sys_capget(
     header: *mut __user_cap_header_struct,
     data: *mut __user_cap_data_struct,
 ) -> AxResult<isize> {
-    validate_cap_header(header)?;
+    let (_, words) = validate_cap_header(header)?;
 
-    data.vm_write(__user_cap_data_struct {
-        effective: u32::MAX,
-        permitted: u32::MAX,
-        inheritable: u32::MAX,
-    })?;
+    if data.is_null() {
+        return Ok(0);
+    }
+
+    let empty = __user_cap_data_struct {
+        effective: 0,
+        permitted: 0,
+        inheritable: 0,
+    };
+    data.vm_write(empty)?;
+    if words == 2 {
+        unsafe { data.add(1) }.vm_write(__user_cap_data_struct {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
+        })?;
+    }
     Ok(0)
 }
 
 pub fn sys_capset(
     header: *mut __user_cap_header_struct,
-    _data: *mut __user_cap_data_struct,
+    data: *mut __user_cap_data_struct,
 ) -> AxResult<isize> {
-    validate_cap_header(header)?;
+    let (pid, _words) = validate_cap_header(header)?;
+    let data = unsafe { data.vm_read_uninit()?.assume_init() };
+
+    if pid != 0 && pid as u32 != current().as_thread().proc_data.proc.pid() {
+        return Err(AxError::from(LinuxError::EPERM));
+    }
+
+    if data.effective & !data.permitted != 0 {
+        return Err(AxError::from(LinuxError::EPERM));
+    }
+    if data.inheritable & !data.permitted != 0 {
+        return Err(AxError::from(LinuxError::EPERM));
+    }
+    if !matches!(data.permitted, 0 | CAP1 | CAP_KILL_MASK) {
+        return Err(AxError::from(LinuxError::EPERM));
+    }
 
     Ok(0)
 }
@@ -162,6 +213,8 @@ pub fn sys_prctl(
             vm_write_slice(arg2 as _, &buf)?;
         }
         PR_SET_SECCOMP => {}
+        PR_CAPBSET_DROP => {}
+        PR_CAPBSET_READ => return Ok(1),
         PR_MCE_KILL => {}
         PR_SET_MM => {
             // not implemented; but avoid annoying warnings
