@@ -45,6 +45,20 @@ fi
 if ! grep -q '^nobody:' /etc/group 2>/dev/null; then
     echo "nobody:x:65534:" >> /etc/group
 fi
+cat > /etc/protocols <<'EOF'
+hopopt 0 HOPOPT
+ipv6 41 IPv6
+ipv6-route 43 IPv6-Route
+ipv6-frag 44 IPv6-Frag
+esp 50 ESP
+ah 51 AH
+ipv6-icmp 58 IPv6-ICMP
+ipv6-nonxt 59 IPv6-NoNxt
+ipv6-opts 60 IPv6-Opts
+tcp 6 TCP
+udp 17 UDP
+icmp 1 ICMP
+EOF
 
 # ---- dynamic linker setup ----
 LIBC_LIB="$TEST_DIR/lib"

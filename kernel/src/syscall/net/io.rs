@@ -10,7 +10,7 @@ use linux_raw_sys::net::{
 
 use super::addr::SocketAddrExt;
 use crate::{
-    file::{FileLike, Socket, add_file_like},
+    file::{FileLike, RawIpv6Socket, Socket, add_file_like},
     mm::{IoVec, IoVectorBuf, UserConstPtr, UserPtr, VmBytes, VmBytesMut},
     syscall::net::{CMsg, CMsgBuilder},
 };
@@ -30,6 +30,10 @@ fn send_impl(
     };
 
     debug!("sys_send <= fd: {fd}, flags: {flags}, addr: {addr:?}");
+
+    if let Ok(raw) = RawIpv6Socket::from_fd(fd) {
+        return raw.send_packet(&mut src).map(|sent| sent as isize);
+    }
 
     let socket = Socket::from_fd(fd)?;
     let sent = socket.send(
@@ -89,6 +93,10 @@ fn recv_impl(
     cmsg_builder: Option<CMsgBuilder>,
 ) -> AxResult<isize> {
     debug!("sys_recv <= fd: {fd}, flags: {flags}");
+
+    if let Ok(raw) = RawIpv6Socket::from_fd(fd) {
+        return raw.recv_packet(&mut dst).map(|recv| recv as isize);
+    }
 
     let socket = Socket::from_fd(fd)?;
     let mut recv_flags = RecvFlags::empty();

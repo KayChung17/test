@@ -55,6 +55,13 @@ impl SocketAddrExt for SocketAddr {
         match read_family(addr, addrlen)? as u32 {
             AF_INET => SocketAddrV4::read_from_user(addr, addrlen).map(Self::V4),
             AF_INET6 => SocketAddrV6::read_from_user(addr, addrlen).map(Self::V6),
+            AF_UNSPEC if addrlen == size_of::<sockaddr_in>() as socklen_t => {
+                let addr_in = addr.cast::<sockaddr_in>().get_as_ref()?;
+                Ok(Self::V4(SocketAddrV4::new(
+                    Ipv4Addr::from_bits(u32::from_be(addr_in.sin_addr.s_addr)),
+                    u16::from_be(addr_in.sin_port),
+                )))
+            }
             _ => Err(AxError::from(LinuxError::EAFNOSUPPORT)),
         }
     }
@@ -245,7 +252,9 @@ impl SocketAddrExt for VsockAddr {
 impl SocketAddrExt for SocketAddrEx {
     fn read_from_user(addr: UserConstPtr<sockaddr>, addrlen: socklen_t) -> AxResult<Self> {
         match read_family(addr, addrlen)? as u32 {
-            AF_INET | AF_INET6 => SocketAddr::read_from_user(addr, addrlen).map(Self::Ip),
+            AF_UNSPEC | AF_INET | AF_INET6 => {
+                SocketAddr::read_from_user(addr, addrlen).map(Self::Ip)
+            }
             AF_UNIX => UnixSocketAddr::read_from_user(addr, addrlen).map(Self::Unix),
             #[cfg(feature = "vsock")]
             AF_VSOCK => VsockAddr::read_from_user(addr, addrlen).map(Self::Vsock),

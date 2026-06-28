@@ -6,13 +6,14 @@ use axsync::Mutex;
 use linux_raw_sys::net::socklen_t;
 
 use crate::{
-    file::{FileLike, Socket},
+    file::{FileLike, RawIpv6Socket, Socket},
     mm::{UserConstPtr, UserPtr},
 };
 
 const PROTO_TCP: u32 = linux_raw_sys::net::IPPROTO_TCP as u32;
 
 const PROTO_IP: u32 = linux_raw_sys::net::IPPROTO_IP as u32;
+const PROTO_IPV6: u32 = linux_raw_sys::net::IPPROTO_IPV6 as u32;
 
 static MULTICAST_MEMBERSHIPS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
@@ -140,6 +141,12 @@ pub fn sys_getsockopt(
         }
         *len = size_of::<T>() as socklen_t;
         val.cast().get_as_mut()
+    }
+
+    if level == PROTO_IPV6 && optname == linux_raw_sys::net::IPV6_CHECKSUM {
+        let offset = *get::<i32>(optval, optlen)?;
+        RawIpv6Socket::from_fd(fd)?.set_checksum_offset(offset)?;
+        return Ok(0);
     }
 
     let socket = Socket::from_fd(fd)?;

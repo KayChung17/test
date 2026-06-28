@@ -12,13 +12,13 @@ use linux_raw_sys::{
     general::{O_CLOEXEC, O_NONBLOCK},
     net::{
         AF_INET, AF_INET6, AF_UNIX, AF_VSOCK, IPPROTO_TCP, IPPROTO_UDP, SHUT_RD, SHUT_RDWR, SHUT_WR,
-        SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM, sockaddr, socklen_t,
+        SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET, SOCK_STREAM, sockaddr, socklen_t,
     },
 };
 
 use super::addr::SocketAddrExt;
 use crate::{
-    file::{FileLike, Socket, get_file_like},
+    file::{FileLike, RawIpv6Socket, Socket, get_file_like},
     mm::{UserConstPtr, UserPtr},
     task::AsThread,
 };
@@ -26,6 +26,14 @@ use crate::{
 pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
     debug!("sys_socket <= domain: {domain}, ty: {raw_ty}, proto: {proto}");
     let ty = raw_ty & 0xFF;
+    if domain == AF_INET6 && ty == SOCK_RAW {
+        if proto == 0 {
+            return Err(AxError::from(LinuxError::EPROTONOSUPPORT));
+        }
+        let socket = RawIpv6Socket::new();
+        let cloexec = raw_ty & O_CLOEXEC != 0;
+        return socket.add_to_fd_table(cloexec).map(|fd| fd as isize);
+    }
 
     let pid = current().as_thread().proc_data.proc.pid();
     let socket = match (domain, ty) {
