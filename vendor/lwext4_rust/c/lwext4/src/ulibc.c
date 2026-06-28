@@ -65,9 +65,21 @@ int strncmp(const char *_l, const char *_r, size_t n)
         return *l - *r;
 }
 
-// fix me
-__attribute__((weak)) 
-FILE *stdout = NULL;
+/*
+ * stdio.h differs across musl toolchains: some declare stdout as FILE *,
+ * while newer ones declare FILE *const.  Defining it as a C object here can
+ * therefore conflict with the header.  Provide only the weak ELF symbol that
+ * ext4_debug's fflush(stdout) needs; the C type remains owned by stdio.h.
+ */
+__asm__(
+        ".weak stdout\n"
+        ".section .bss.stdout,\"aw\",@nobits\n"
+        ".balign 8\n"
+        ".type stdout, @object\n"
+        ".size stdout, 8\n"
+        "stdout:\n"
+        ".zero 8\n"
+        ".previous\n");
 
 __attribute__((weak)) 
 int fflush(FILE *f)
