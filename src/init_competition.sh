@@ -61,6 +61,8 @@ if [ "$TEST_LIBC" = "glibc" ]; then
 else
     mkdir -p /lib /lib64
     for loader in \
+        ld-musl-riscv64.so.1 \
+        ld-musl-loongarch-lp64d.so.1 \
         ld-linux-riscv64-lp64d.so.1 \
         ld-linux-loongarch-lp64d.so.1
     do
