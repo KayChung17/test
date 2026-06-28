@@ -12,7 +12,11 @@ pub fn sys_mount(
     _flags: i32,
     _data: *const c_void,
 ) -> AxResult<isize> {
-    let source = vm_load_string(source)?;
+    let source = if source.is_null() {
+        None
+    } else {
+        Some(vm_load_string(source)?)
+    };
     let target = vm_load_string(target)?;
     let fs_type = vm_load_string(fs_type)?;
     debug!("sys_mount <= source: {source:?}, target: {target:?}, fs_type: {fs_type:?}");
@@ -25,7 +29,9 @@ pub fn sys_mount(
         return Ok(0);
     }
 
-    if source.starts_with("/dev/") {
+    if let Some(source) = source.as_deref()
+        && source.starts_with("/dev/")
+    {
         let fs = axfs::lookup_extra_filesystem(&source).ok_or(AxError::NoSuchDevice)?;
         target.mount(&fs)?;
         return Ok(0);
