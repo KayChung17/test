@@ -143,7 +143,7 @@ is_directory_scan() {
 run_ltp_all_cases() {
     local target_dir="ltp/testcases/bin"
     local case_timeout="${LTP_CASE_TIMEOUT:-5}"
-    local file base ret
+    local file base ret pid watchdog
 
     echo "#### OS COMP TEST GROUP START ltp-$TEST_LIBC ####"
     echo "[LTP] target_dir=$target_dir case_timeout=${case_timeout}s"
@@ -153,16 +153,20 @@ run_ltp_all_cases() {
         base="${file##*/}"
         echo "RUN LTP CASE $base"
 
-        if command -v timeout >/dev/null 2>&1; then
-            timeout "$case_timeout" "$file"
-            ret=$?
-        elif [ -x /bin/busybox ]; then
-            /bin/busybox timeout "$case_timeout" "$file"
-            ret=$?
-        else
-            "$file"
-            ret=$?
-        fi
+        "$file" &
+        pid=$!
+        (
+            sleep "$case_timeout"
+            kill -TERM "$pid" 2>/dev/null || exit 0
+            sleep 1
+            kill -KILL "$pid" 2>/dev/null || true
+        ) &
+        watchdog=$!
+
+        wait "$pid"
+        ret=$?
+        kill "$watchdog" 2>/dev/null || true
+        wait "$watchdog" 2>/dev/null || true
 
         if [ "$ret" -eq 124 ] || [ "$ret" -eq 137 ] || [ "$ret" -eq 143 ]; then
             echo "[LTP-CASE-TIMEOUT] $base after ${case_timeout}s"
