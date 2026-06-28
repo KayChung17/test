@@ -36,6 +36,10 @@ pub fn with_fs<R>(dirfd: c_int, f: impl FnOnce(&mut FsContext) -> AxResult<R>) -
 
 pub enum ResolveAtResult {
     File(Location),
+    OpenedFile {
+        file: Arc<dyn FileLike>,
+        location: Location,
+    },
     Other(Arc<dyn FileLike>),
 }
 
@@ -43,6 +47,7 @@ impl ResolveAtResult {
     pub fn into_file(self) -> Option<Location> {
         match self {
             Self::File(file) => Some(file),
+            Self::OpenedFile { location, .. } => Some(location),
             Self::Other(_) => None,
         }
     }
@@ -50,6 +55,7 @@ impl ResolveAtResult {
     pub fn stat(&self) -> AxResult<Kstat> {
         match self {
             Self::File(file) => file.metadata().map(|it| metadata_to_kstat(&it)),
+            Self::OpenedFile { file, .. } => file.stat(),
             Self::Other(file_like) => file_like.stat(),
         }
     }
@@ -65,7 +71,10 @@ pub fn resolve_at(dirfd: c_int, path: Option<&str>, flags: u32) -> AxResult<Reso
             let f = file_like.clone();
             if let Some(file) = f.downcast_ref::<File>() {
                 match file.inner().backend() {
-                    Ok(backend) => Ok(ResolveAtResult::File(backend.location().clone())),
+                    Ok(backend) => Ok(ResolveAtResult::OpenedFile {
+                        file: file_like,
+                        location: backend.location().clone(),
+                    }),
                     Err(e) => Err(e),
                 }
             } else if let Some(dir) = f.downcast_ref::<Directory>() {
@@ -186,7 +195,7 @@ impl FileLike for File {
     }
 
     fn stat(&self) -> AxResult<Kstat> {
-        Ok(metadata_to_kstat(&self.inner().location().metadata()?))
+        Ok(metadata_to_kstat(&self.inner().metadata()?))
     }
 
     fn ioctl(&self, cmd: u32, arg: usize) -> AxResult<usize> {

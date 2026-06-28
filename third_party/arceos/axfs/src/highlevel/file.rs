@@ -12,7 +12,8 @@ use core::{num::NonZeroUsize, ops::Range, task::Context};
 
 use axalloc::{UsageKind, global_allocator};
 use axfs_ng_vfs::{
-    FileNode, Location, NodeFlags, NodePermission, NodeType, VfsError, VfsResult, path::Path,
+    FileNode, Location, Metadata, NodeFlags, NodePermission, NodeType, VfsError, VfsResult,
+    path::Path,
 };
 use axhal::mem::{PhysAddr, VirtAddr, virt_to_phys};
 use axio::{SeekFrom, prelude::*};
@@ -542,6 +543,12 @@ impl CachedFile {
         self.set_len(0)
     }
 
+    /// Returns the current logical file length, including dirty cached writes
+    /// that have not yet been flushed to the backing filesystem.
+    pub fn len(&self) -> u64 {
+        self.shared.logical_len.load(Ordering::Acquire)
+    }
+
     /// Returns `true` if this file is backed by an in-memory filesystem (e.g. tmpfs).
     pub fn in_memory(&self) -> bool {
         self.in_memory
@@ -819,6 +826,13 @@ impl CachedFile {
     pub fn location(&self) -> &Location {
         &self.inner
     }
+
+    /// Returns metadata with the cached logical length reflected in `size`.
+    pub fn metadata(&self) -> VfsResult<Metadata> {
+        let mut metadata = self.inner.metadata()?;
+        metadata.size = self.len();
+        Ok(metadata)
+    }
 }
 
 impl Drop for CachedFile {
@@ -905,6 +919,15 @@ impl FileBackend {
         match self {
             Self::Cached(cached) => cached.location(),
             Self::Direct(loc) => loc,
+        }
+    }
+
+    /// Returns metadata for this backend. Cached files report the in-memory
+    /// logical length so fstat observes writes before fsync/drop.
+    pub fn metadata(&self) -> VfsResult<Metadata> {
+        match self {
+            Self::Cached(cached) => cached.metadata(),
+            Self::Direct(loc) => loc.metadata(),
         }
     }
 
@@ -1002,6 +1025,12 @@ impl File {
     /// Returns a reference to the underlying [`Location`].
     pub fn location(&self) -> &Location {
         self.inner.location()
+    }
+
+    /// Returns metadata for this opened file.
+    pub fn metadata(&self) -> VfsResult<Metadata> {
+        self.access(FileFlags::empty())?;
+        self.inner.metadata()
     }
 
     /// Reads a number of bytes starting from a given offset.
