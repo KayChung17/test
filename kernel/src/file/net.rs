@@ -106,6 +106,10 @@ impl RawIpv6Socket {
         Ok(())
     }
 
+    pub fn checksum_offset(&self) -> i32 {
+        self.checksum_offset.lock().map_or(-1, |offset| offset as i32)
+    }
+
     pub fn send_packet(&self, src: &mut IoSrc) -> AxResult<usize> {
         let len = src.remaining();
         let mut packet = vec![0; len];

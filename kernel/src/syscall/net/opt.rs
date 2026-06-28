@@ -144,8 +144,7 @@ pub fn sys_getsockopt(
     }
 
     if level == PROTO_IPV6 && optname == linux_raw_sys::net::IPV6_CHECKSUM {
-        let offset = *get::<i32>(optval, optlen)?;
-        RawIpv6Socket::from_fd(fd)?.set_checksum_offset(offset)?;
+        *get::<i32>(optval, optlen)? = RawIpv6Socket::from_fd(fd)?.checksum_offset();
         return Ok(0);
     }
 
@@ -186,6 +185,12 @@ pub fn sys_setsockopt(
             return Err(AxError::InvalidInput);
         }
         val.cast().get_as_ref()
+    }
+
+    if level == PROTO_IPV6 && optname == linux_raw_sys::net::IPV6_CHECKSUM {
+        let offset = *get::<i32>(optval, optlen)?;
+        RawIpv6Socket::from_fd(fd)?.set_checksum_offset(offset)?;
+        return Ok(0);
     }
 
     let socket = Socket::from_fd(fd)?;
