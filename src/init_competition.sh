@@ -180,17 +180,21 @@ for script in $SCRIPTS; do
             echo "[SUITE-TYPE] standalone"
         fi
 
-        echo "#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####"
+        suite_log=$(mktemp "/tmp/${name}.XXXXXX") || exit 1
         if [ "$synthetic_basic" -eq 1 ]; then
             cd ./basic || exit 1
-            /bin/sh ./run-all.sh
+            /bin/sh ./run-all.sh >"$suite_log" 2>&1
             rc=$?
             cd "$TEST_DIR" || exit 1
         else
-            /bin/sh "$script"
+            /bin/sh "$script" >"$suite_log" 2>&1
             rc=$?
         fi
-        echo "#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####"
+        sed \
+            -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
+            -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/" \
+            "$suite_log"
+        rm -f "$suite_log"
     fi
 
     echo "[SUITE-RESULT] $name exit=$rc"
