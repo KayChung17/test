@@ -87,6 +87,17 @@ const DUMMY_MEMINFO: &str = indoc! {"
     DirectMap1G:     1048576 kB
 "};
 
+const DUMMY_SCHED_DEBUG: &str = indoc! {"
+    Sched Debug Version: v0.11
+    cpu#0
+      .nr_running                    : 1
+      .load                          : 0
+      .nr_switches                   : 0
+    runnable tasks:
+     task   PID         tree-key  switches  prio     wait-time             sum-exec        sum-sleep
+    init     1         0.000000         0   120         0.000000         0.000000         0.000000
+"};
+
 pub fn new_procfs() -> Filesystem {
     SimpleFs::new_with("proc".into(), 0x9fa0, builder)
 }
@@ -407,6 +418,10 @@ fn builder(fs: Arc<SimpleFs>) -> DirMaker {
         SimpleFile::new_regular(fs.clone(), || Ok(DUMMY_MEMINFO)),
     );
     root.add(
+        "sched_debug",
+        SimpleFile::new_regular(fs.clone(), || Ok(DUMMY_SCHED_DEBUG)),
+    );
+    root.add(
         "meminfo2",
         SimpleFile::new_regular(fs.clone(), || {
             let allocator = axalloc::global_allocator();
@@ -450,6 +465,10 @@ fn builder(fs: Arc<SimpleFs>) -> DirMaker {
             kernel.add(
                 "pid_max",
                 SimpleFile::new_regular(fs.clone(), || Ok("32768\n")),
+            );
+            kernel.add(
+                "tainted",
+                SimpleFile::new_regular(fs.clone(), || Ok("0\n")),
             );
 
             SimpleDir::new_maker(fs.clone(), Arc::new(kernel))
