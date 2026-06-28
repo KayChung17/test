@@ -21,7 +21,7 @@ export A := $(PWD)
 export NO_AXSTD := y
 export AX_LIB := axfeat
 export COMPETITION ?= n
-export APP_FEATURES := qemu
+export APP_FEATURES := $(if $(filter $(ARCH),loongarch64),qemu-pci,qemu)
 
 ifeq ($(MEMTRACK), y)
 	APP_FEATURES += starry-api/memtrack
