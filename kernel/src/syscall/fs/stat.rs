@@ -14,6 +14,8 @@ use crate::{
     task::AsThread,
 };
 
+use super::mount::is_path_on_readonly_mount;
+
 /// Get the file metadata by `path` and write into `statbuf`.
 ///
 /// Return 0 if success.
@@ -110,6 +112,10 @@ pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) 
     let path = path.nullable().map(vm_load_string).transpose()?;
     debug!("sys_faccessat2 <= dirfd: {dirfd}, path: {path:?}, mode: {mode}, flags: {flags}");
 
+    if mode & !(R_OK | W_OK | X_OK) != 0 {
+        return Err(AxError::InvalidInput);
+    }
+
     let file = resolve_at(dirfd, path.as_deref(), flags)?;
     let stat = file.stat()?;
     let loc = file.into_file();
@@ -118,6 +124,9 @@ pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) 
     let gid = curr.as_thread().proc_data.gid();
 
     if let Some(loc) = loc {
+        if mode & W_OK != 0 && is_path_on_readonly_mount(loc.absolute_path()?.as_str()) {
+            return Err(AxError::ReadOnlyFilesystem);
+        }
         check_search_permission(&loc, uid, gid)?;
     }
 
