@@ -231,6 +231,7 @@ impl CloneArgs {
             proc_data.set_uid(old_proc_data.uid());
             proc_data.set_gid(old_proc_data.gid());
             proc_data.set_heap_top(old_proc_data.get_heap_top());
+            *proc_data.rlim.write() = old_proc_data.rlim.read().clone();
 
             {
                 let mut scope = proc_data.scope.write();

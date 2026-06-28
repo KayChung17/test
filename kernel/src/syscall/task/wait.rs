@@ -134,6 +134,11 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
                     continue;
                 }
 
+                if pending.has(Signo::SIGCHLD) {
+                    curr.clear_interrupt();
+                    continue;
+                }
+
                 return Err(AxError::Interrupted);
             }
         }
