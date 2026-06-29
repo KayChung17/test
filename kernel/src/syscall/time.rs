@@ -129,6 +129,18 @@ pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxR
     Ok(0)
 }
 
+pub fn sys_clock_settime(clock_id: __kernel_clockid_t, ts: *const timespec) -> AxResult<isize> {
+    if clock_id as u32 != CLOCK_REALTIME {
+        return Err(AxError::InvalidInput);
+    }
+    let ts = unsafe { ts.vm_read_uninit()?.assume_init() };
+    let _ = ts.try_into_time_value()?;
+    if current().as_thread().proc_data.uid() != 0 {
+        return Err(AxError::from(LinuxError::EPERM));
+    }
+    Ok(0)
+}
+
 pub fn sys_gettimeofday(ts: *mut timeval) -> AxResult<isize> {
     ts.vm_write(timeval::from_time_value(wall_time()))?;
     Ok(0)
