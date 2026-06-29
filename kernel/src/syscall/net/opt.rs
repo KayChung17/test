@@ -106,6 +106,7 @@ macro_rules! call_dispatch {
             (PROTO_TCP, TCP_INFO) => TcpInfo,
 
             (PROTO_IP, IP_TTL) => Ttl as Int<u8>,
+            (PROTO_IPV6, IPV6_V6ONLY) => V6Only as IntBool,
         }
     }};
     ($dispatch:ident, $in:expr, $($pat:pat => $which:ident $(as $conv:ty)?),* $(,)?) => {

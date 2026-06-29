@@ -115,6 +115,9 @@ impl Configurable for GeneralOptions {
             O::ReceiveTimeout(timeout) => {
                 **timeout = Duration::from_nanos(self.recv_timeout_nanos.load(Ordering::Relaxed));
             }
+            O::V6Only(v6_only) => {
+                **v6_only = false;
+            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -138,6 +141,7 @@ impl Configurable for GeneralOptions {
                 self.recv_timeout_nanos
                     .store(timeout.as_nanos() as u64, Ordering::Relaxed);
             }
+            O::V6Only(_) => {}
             O::SendBuffer(_) | O::ReceiveBuffer(_) => {
                 // TODO(mivik): implement buffer size options
             }

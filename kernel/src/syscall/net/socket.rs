@@ -8,6 +8,7 @@ use axnet::{
     unix::{DgramTransport, StreamTransport, UnixSocket},
 };
 use axtask::current;
+use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use linux_raw_sys::{
     general::{O_CLOEXEC, O_NONBLOCK},
     net::{
@@ -23,6 +24,26 @@ use crate::{
     mm::{UserConstPtr, UserPtr},
     task::AsThread,
 };
+
+fn normalize_ip_addr(addr: SocketAddrEx) -> SocketAddrEx {
+    let SocketAddrEx::Ip(SocketAddr::V6(v6)) = addr else {
+        return addr;
+    };
+
+    let ip = v6.ip();
+    let octets = ip.octets();
+    let mapped_v4 = (octets[..10] == [0; 10] && octets[10] == 0xff && octets[11] == 0xff)
+        .then(|| Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]));
+    let v4 = if ip.is_unspecified() {
+        Ipv4Addr::UNSPECIFIED
+    } else if let Some(v4) = mapped_v4 {
+        v4
+    } else {
+        return SocketAddrEx::Ip(SocketAddr::V6(v6));
+    };
+
+    SocketAddrEx::Ip(SocketAddr::V4(SocketAddrV4::new(v4, v6.port())))
+}
 
 pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
     debug!("sys_socket <= domain: {domain}, ty: {raw_ty}, proto: {proto}");
@@ -85,7 +106,7 @@ pub fn sys_bind(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxResult
         return Ok(0);
     }
 
-    let addr = SocketAddrEx::read_from_user(addr, addrlen)?;
+    let addr = normalize_ip_addr(SocketAddrEx::read_from_user(addr, addrlen)?);
     debug!("sys_bind <= fd: {fd}, addr: {addr:?}");
 
     if let SocketAddrEx::Ip(ip_addr) = &addr
@@ -105,7 +126,7 @@ pub fn sys_bind(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxResult
 }
 
 pub fn sys_connect(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxResult<isize> {
-    let addr = SocketAddrEx::read_from_user(addr, addrlen)?;
+    let addr = normalize_ip_addr(SocketAddrEx::read_from_user(addr, addrlen)?);
     debug!("sys_connect <= fd: {fd}, addr: {addr:?}");
 
     Socket::from_fd(fd)?.connect(addr).map_err(|e| {
