@@ -776,28 +776,65 @@ impl CachedFile {
         if self.in_memory {
             return Ok(());
         }
+        let _ = source;
         let file = self.inner.entry().as_file()?;
         let logical_len = self.shared.logical_len.load(Ordering::Acquire);
-        let mut guard = self.shared.page_cache.lock();
-        let dirty_pages = guard
-            .iter()
-            .filter(|(_, page)| page.dirty)
-            .map(|(pn, _)| *pn)
-            .collect::<Vec<_>>();
-        let mut flushed_pages = 0usize;
-        for pn in dirty_pages {
-            if let Some(page) = guard.get_mut(&pn) {
-                flushed_pages += 1;
-                let page_start = pn as u64 * PAGE_SIZE as u64;
-                let len = (self.shared.logical_len.load(Ordering::Acquire).saturating_sub(page_start))
-                    .min(PAGE_SIZE as u64) as usize;
-                if len > 0 {
-                    file.write_at(&page.data()[..len], page_start)?;
+        let dirty_pages = {
+            let guard = self.shared.page_cache.lock();
+            guard
+                .iter()
+                .filter(|(_, page)| page.dirty)
+                .map(|(pn, _)| *pn)
+                .collect::<Vec<_>>()
+        };
+        if !dirty_pages.is_empty() {
+            let page_chunks = {
+                let mut guard = self.shared.page_cache.lock();
+                let mut chunks = Vec::with_capacity(dirty_pages.len());
+                for pn in &dirty_pages {
+                    if let Some(page) = guard.get_mut(pn) {
+                        let page_start = *pn as u64 * PAGE_SIZE as u64;
+                        let len = logical_len.saturating_sub(page_start).min(PAGE_SIZE as u64) as usize;
+                        if len > 0 {
+                            chunks.push((*pn, page.data()[..len].to_vec()));
+                        }
+                    }
                 }
-                page.dirty = false;
+                chunks
+            };
+
+            let mut run_start = 0u64;
+            let mut run_end = 0u64;
+            let mut run_buf = Vec::new();
+            for (pn, data) in &page_chunks {
+                let page_start = *pn as u64 * PAGE_SIZE as u64;
+                if run_buf.is_empty() {
+                    run_start = page_start;
+                    run_end = page_start + data.len() as u64;
+                    run_buf.extend_from_slice(data);
+                    continue;
+                }
+                if page_start == run_end {
+                    run_end += data.len() as u64;
+                    run_buf.extend_from_slice(data);
+                } else {
+                    file.write_at(&run_buf, run_start)?;
+                    run_start = page_start;
+                    run_end = page_start + data.len() as u64;
+                    run_buf.clear();
+                    run_buf.extend_from_slice(data);
+                }
+            }
+            if !run_buf.is_empty() {
+                file.write_at(&run_buf, run_start)?;
+            }
+            let mut guard = self.shared.page_cache.lock();
+            for pn in &dirty_pages {
+                if let Some(page) = guard.get_mut(pn) {
+                    page.dirty = false;
+                }
             }
         }
-        drop(guard);
         let evicted_pages = {
             let dirty_evicted = self.shared.dirty_evicted.lock();
             dirty_evicted
@@ -805,13 +842,35 @@ impl CachedFile {
                 .map(|(pn, snapshot)| (*pn, snapshot.clone()))
                 .collect::<Vec<_>>()
         };
-        for (pn, snapshot) in &evicted_pages {
-            let page_start = *pn as u64 * PAGE_SIZE as u64;
-            if !snapshot.is_empty() {
-                file.write_at(&snapshot[..], page_start)?;
-            }
-        }
         if !evicted_pages.is_empty() {
+            let mut run_start = 0u64;
+            let mut run_end = 0u64;
+            let mut run_buf = Vec::new();
+            for (pn, snapshot) in &evicted_pages {
+                let page_start = *pn as u64 * PAGE_SIZE as u64;
+                if snapshot.is_empty() {
+                    continue;
+                }
+                if run_buf.is_empty() {
+                    run_start = page_start;
+                    run_end = page_start + snapshot.len() as u64;
+                    run_buf.extend_from_slice(snapshot);
+                    continue;
+                }
+                if page_start == run_end {
+                    run_end += snapshot.len() as u64;
+                    run_buf.extend_from_slice(snapshot);
+                } else {
+                    file.write_at(&run_buf, run_start)?;
+                    run_start = page_start;
+                    run_end = page_start + snapshot.len() as u64;
+                    run_buf.clear();
+                    run_buf.extend_from_slice(snapshot);
+                }
+            }
+            if !run_buf.is_empty() {
+                file.write_at(&run_buf, run_start)?;
+            }
             let mut dirty_evicted = self.shared.dirty_evicted.lock();
             for (pn, _) in &evicted_pages {
                 dirty_evicted.remove(pn);

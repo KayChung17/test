@@ -15,6 +15,13 @@
 #   RV_IMG          Raw RISC-V evaluator image (.img) to gzip if needed
 #   LA_IMG          Raw LoongArch evaluator image (.img) to gzip if needed
 #   HOOK_DIR        Writable host directory for /mnt/cghook
+#   KEEP_EVAL_TMP   Keep prepared evaluator data and logs under tmp/ when set to 1
+#   ONLY_SUITES     Write /etc/only_suites into staged rootfs when non-empty
+#   SKIP_SUITES     Write /etc/skip_suites into staged rootfs when non-empty
+#   LTP_CASE_TIMEOUT       Write /etc/ltp_case_timeout when non-empty
+#   SUITE_TIMEOUT_LTP      Write /etc/suite_timeout_ltp when non-empty
+#   SUITE_TIMEOUT_DEFAULT  Write /etc/suite_timeout_default when non-empty
+#   EVAL_QEMU_TIMEOUT      Override evaluator qemu.timeout in seconds; defaults to 7200
 #
 # Notes:
 # - The evaluator code expects /coursegrader/testdata/sdcard-rv.img.gz and
@@ -39,6 +46,8 @@ AUTOTEST_REPO=${AUTOTEST_REPO:-$(realpath -m "$ROOT/../autotest-for-oskernel")}
 TESTDATA_DIR=${TESTDATA_DIR:-$(realpath -m "$ROOT/../oskernel-autotest-data")}
 DOCKER_IMAGE=${DOCKER_IMAGE:-zhouzhouyi/os-contest:20260510}
 HOOK_DIR=${HOOK_DIR:-$TESTDATA_DIR}
+LIBC=${LIBC:-glibc}
+EVAL_QEMU_TIMEOUT=${EVAL_QEMU_TIMEOUT:-7200}
 
 if [ ! -d "$AUTOTEST_REPO/kernel" ]; then
     echo "Missing autotest repo: $AUTOTEST_REPO" >&2
@@ -85,11 +94,14 @@ fi
 PREP_DIR="$ROOT/tmp/local-evaluator-data"
 PREP_SUBMIT_DIR="$ROOT/tmp/local-evaluator-submit"
 cleanup() {
-    rm -rf "$PREP_DIR" "$PREP_SUBMIT_DIR"
+    if [ "${KEEP_EVAL_TMP:-0}" = "1" ]; then
+        return 0
+    fi
+    docker run --rm -v "$ROOT/tmp:/work" -u root "$DOCKER_IMAGE" sh -c 'rm -rf /work/local-evaluator-data /work/local-evaluator-submit' >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-rm -rf "$PREP_DIR" "$PREP_SUBMIT_DIR"
+cleanup
 mkdir -p "$PREP_DIR" "$PREP_SUBMIT_DIR"
 cp -a "$TESTDATA_DIR/." "$PREP_DIR/"
 
@@ -112,8 +124,69 @@ rsync -a --delete \
     --exclude='submit_loongarch64-qemu-virt.bin' \
     --exclude='submit_loongarch64-qemu-virt.elf' \
     "$ROOT/" "$PREP_SUBMIT_DIR/"
+mkdir -p "$PREP_SUBMIT_DIR/make"
+if [ "$LIBC" = "musl" ]; then
+    MUSL_ROOTFS_DIR="$PREP_SUBMIT_DIR/rootfs-source/riscv64-musl"
+    rm -rf "$MUSL_ROOTFS_DIR"
+    cp -a "$ROOT/rootfs-source/riscv64" "$MUSL_ROOTFS_DIR"
+    printf 'musl\n' > "$MUSL_ROOTFS_DIR/etc/test_libc"
+    python3 - <<PY
+from pathlib import Path
+p = Path(r"$PREP_SUBMIT_DIR/Makefile")
+text = p.read_text()
+old = '\$(MAKE) --no-print-directory rootfs ARCH=riscv64 ROOTFS_SOURCE_DIR=rootfs-source/riscv64'
+new = '\$(MAKE) --no-print-directory rootfs ARCH=riscv64 ROOTFS_SOURCE_DIR=rootfs-source/riscv64-musl'
+if old not in text:
+    raise SystemExit('failed to patch disk-rv rootfs source for musl mode')
+p.write_text(text.replace(old, new, 1))
+PY
+fi
 mkdir -p "$HOOK_DIR"
 mkdir -p "$PREP_DIR/cghook"
+
+python3 - <<PY
+import json
+from pathlib import Path
+
+config_path = Path(r"$PREP_DIR") / "config.json"
+timeout = int(r"$EVAL_QEMU_TIMEOUT")
+
+if config_path.exists():
+    config = json.loads(config_path.read_text())
+else:
+    config = {}
+
+config["qemu.timeout"] = timeout
+config_path.write_text(json.dumps(config, indent=4) + "\n")
+PY
+
+write_rootfs_control_file() {
+    local rel_path="$1"
+    local file_name="$2"
+    local value="$3"
+    local target_dir="$PREP_SUBMIT_DIR/$rel_path/etc"
+
+    mkdir -p "$target_dir"
+    if [ -n "$value" ]; then
+        printf '%s\n' "$value" > "$target_dir/$file_name"
+    else
+        rm -f "$target_dir/$file_name"
+    fi
+}
+
+write_all_rootfs_control_files() {
+    local rel_path
+    for rel_path in rootfs-source/riscv64 rootfs-source/loongarch64; do
+        [ -d "$PREP_SUBMIT_DIR/$rel_path" ] || continue
+        write_rootfs_control_file "$rel_path" only_suites "${ONLY_SUITES:-}"
+        write_rootfs_control_file "$rel_path" skip_suites "${SKIP_SUITES:-}"
+        write_rootfs_control_file "$rel_path" ltp_case_timeout "${LTP_CASE_TIMEOUT:-}"
+        write_rootfs_control_file "$rel_path" suite_timeout_ltp "${SUITE_TIMEOUT_LTP:-}"
+        write_rootfs_control_file "$rel_path" suite_timeout_default "${SUITE_TIMEOUT_DEFAULT:-}"
+    done
+}
+
+write_all_rootfs_control_files
 
 prepare_gz() {
     local raw_img="$1"
