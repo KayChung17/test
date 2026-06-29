@@ -243,14 +243,16 @@ run_libc_suites() {
             run_ltp_all_cases 2>&1
             rc=$?
         else
-            suite_log=$(mktemp "/tmp/${name}.XXXXXX") || exit 1
-            /bin/sh "$script" >"$suite_log" 2>&1
-            rc=$?
-            sed \
+            rc_file="/tmp/${name}.$$.rc"
+            rm -f "$rc_file"
+            (
+                /bin/sh "$script"
+                echo "$?" >"$rc_file"
+            ) 2>&1 | sed \
                 -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
-                -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/" \
-                "$suite_log"
-            rm -f "$suite_log"
+                -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/"
+            rc=$(cat "$rc_file" 2>/dev/null || echo 1)
+            rm -f "$rc_file"
         fi
 
         echo "[SUITE-RESULT] $name-$TEST_LIBC exit=$rc"
