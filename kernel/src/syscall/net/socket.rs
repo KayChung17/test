@@ -25,7 +25,7 @@ use crate::{
     task::AsThread,
 };
 
-fn normalize_ip_addr(addr: SocketAddrEx) -> SocketAddrEx {
+pub(super) fn normalize_ip_addr(addr: SocketAddrEx) -> SocketAddrEx {
     let SocketAddrEx::Ip(SocketAddr::V6(v6)) = addr else {
         return addr;
     };
@@ -36,6 +36,8 @@ fn normalize_ip_addr(addr: SocketAddrEx) -> SocketAddrEx {
         .then(|| Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]));
     let v4 = if ip.is_unspecified() {
         Ipv4Addr::UNSPECIFIED
+    } else if ip.is_loopback() {
+        Ipv4Addr::LOCALHOST
     } else if let Some(v4) = mapped_v4 {
         v4
     } else {

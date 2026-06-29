@@ -9,7 +9,7 @@ use linux_raw_sys::net::{
     socklen_t,
 };
 
-use super::addr::SocketAddrExt;
+use super::{addr::SocketAddrExt, socket::normalize_ip_addr};
 use crate::{
     file::{FileLike, RawIpv6Socket, Socket, add_file_like},
     mm::{IoVec, IoVectorBuf, UserConstPtr, UserPtr, VmBytes, VmBytesMut},
@@ -27,7 +27,9 @@ fn send_impl(
     let addr = if addr.is_null() || addrlen == 0 {
         None
     } else {
-        Some(SocketAddrEx::read_from_user(addr, addrlen)?)
+        Some(normalize_ip_addr(SocketAddrEx::read_from_user(
+            addr, addrlen,
+        )?))
     };
 
     debug!("sys_send <= fd: {fd}, flags: {flags}, addr: {addr:?}");
