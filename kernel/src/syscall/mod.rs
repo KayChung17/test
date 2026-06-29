@@ -456,6 +456,7 @@ pub fn handle_syscall(uctx: &mut UserContext) {
             a0 as _, // args_ptr
             a1 as _, // args_size
         ),
+        Sysno::unshare => sys_unshare(a0 as _),
         #[cfg(target_arch = "x86_64")]
         Sysno::fork => sys_fork(uctx),
         Sysno::exit => sys_exit(a0 as _),

@@ -14,10 +14,17 @@ use axnet::{
 };
 use axpoll::{IoEvents, Pollable};
 use axsync::Mutex;
-use linux_raw_sys::general::S_IFSOCK;
+use linux_raw_sys::{
+    general::S_IFSOCK,
+    ioctl::{SIOCGIFINDEX, SIOCSIFFLAGS},
+    net::ifreq,
+};
 
 use super::{FileLike, Kstat};
-use crate::file::{IoDst, IoSrc, get_file_like};
+use crate::{
+    file::{IoDst, IoSrc, get_file_like},
+    mm::{UserConstPtr, UserPtr},
+};
 
 pub struct Socket(pub SocketInner);
 
@@ -270,6 +277,62 @@ impl Pollable for RawIpv6Socket {
         } else {
             IoEvents::OUT
         }
+    }
+
+    fn register(&self, _context: &mut Context<'_>, _events: IoEvents) {}
+}
+
+pub struct PacketSocket {
+    id: usize,
+}
+
+impl PacketSocket {
+    pub fn new() -> Self {
+        Self {
+            id: RAW_SOCKET_ID.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+
+    pub fn bind_ll(&self, _addr: UserConstPtr<linux_raw_sys::net::sockaddr>, _len: u32) -> AxResult {
+        Ok(())
+    }
+
+    pub fn from_fd(fd: c_int) -> AxResult<Arc<Self>> {
+        get_file_like(fd)?
+            .downcast_arc()
+            .map_err(|_| AxError::NotASocket)
+    }
+}
+
+impl FileLike for PacketSocket {
+    fn stat(&self) -> AxResult<Kstat> {
+        Ok(Kstat {
+            mode: S_IFSOCK | 0o777u32,
+            blksize: 4096,
+            ..Default::default()
+        })
+    }
+
+    fn ioctl(&self, cmd: u32, arg: usize) -> AxResult<usize> {
+        match cmd {
+            SIOCGIFINDEX => {
+                let ifr = UserPtr::<ifreq>::from(arg).get_as_mut()?;
+                ifr.ifr_ifru.ifru_ivalue = 1;
+                Ok(0)
+            }
+            SIOCSIFFLAGS => Ok(0),
+            _ => Err(AxError::NotATty),
+        }
+    }
+
+    fn path(&self) -> Cow<'_, str> {
+        format!("socket:[packet-{}]", self.id).into()
+    }
+}
+
+impl Pollable for PacketSocket {
+    fn poll(&self) -> IoEvents {
+        IoEvents::IN | IoEvents::OUT
     }
 
     fn register(&self, _context: &mut Context<'_>, _events: IoEvents) {}

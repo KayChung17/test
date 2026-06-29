@@ -11,14 +11,15 @@ use axtask::current;
 use linux_raw_sys::{
     general::{O_CLOEXEC, O_NONBLOCK},
     net::{
-        AF_INET, AF_INET6, AF_UNIX, AF_VSOCK, IPPROTO_TCP, IPPROTO_UDP, SHUT_RD, SHUT_RDWR, SHUT_WR,
-        SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET, SOCK_STREAM, sockaddr, socklen_t,
+        AF_INET, AF_INET6, AF_PACKET, AF_UNIX, AF_VSOCK, IPPROTO_TCP, IPPROTO_UDP, SHUT_RD,
+        SHUT_RDWR, SHUT_WR, SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET, SOCK_STREAM, sockaddr,
+        socklen_t,
     },
 };
 
 use super::addr::SocketAddrExt;
 use crate::{
-    file::{FileLike, RawIpv6Socket, Socket, get_file_like},
+    file::{FileLike, PacketSocket, RawIpv6Socket, Socket, get_file_like},
     mm::{UserConstPtr, UserPtr},
     task::AsThread,
 };
@@ -31,6 +32,11 @@ pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
             return Err(AxError::from(LinuxError::EPROTONOSUPPORT));
         }
         let socket = RawIpv6Socket::new(proto);
+        let cloexec = raw_ty & O_CLOEXEC != 0;
+        return socket.add_to_fd_table(cloexec).map(|fd| fd as isize);
+    }
+    if domain == AF_PACKET && ty == SOCK_DGRAM {
+        let socket = PacketSocket::new();
         let cloexec = raw_ty & O_CLOEXEC != 0;
         return socket.add_to_fd_table(cloexec).map(|fd| fd as isize);
     }
@@ -74,6 +80,11 @@ pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
 }
 
 pub fn sys_bind(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxResult<isize> {
+    if let Ok(packet) = PacketSocket::from_fd(fd) {
+        packet.bind_ll(addr, addrlen)?;
+        return Ok(0);
+    }
+
     let addr = SocketAddrEx::read_from_user(addr, addrlen)?;
     debug!("sys_bind <= fd: {fd}, addr: {addr:?}");
 

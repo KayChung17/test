@@ -23,7 +23,7 @@ use spin::RwLock;
 
 pub use self::{
     fs::{Directory, File, resolve_at, with_fs},
-    net::{RawIpv6Socket, Socket},
+    net::{PacketSocket, RawIpv6Socket, Socket},
     pidfd::PidFd,
     pipe::Pipe,
 };

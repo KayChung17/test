@@ -323,3 +323,20 @@ pub fn sys_clone(
 pub fn sys_fork(uctx: &UserContext) -> AxResult<isize> {
     sys_clone(uctx, SIGCHLD, 0, 0, 0, 0)
 }
+
+pub fn sys_unshare(flags: u64) -> AxResult<isize> {
+    let flags = CloneFlags::from_bits_truncate(flags);
+    let namespace_flags = CloneFlags::NEWNS
+        | CloneFlags::NEWIPC
+        | CloneFlags::NEWNET
+        | CloneFlags::NEWPID
+        | CloneFlags::NEWUSER
+        | CloneFlags::NEWUTS
+        | CloneFlags::NEWCGROUP;
+
+    if flags.intersects(namespace_flags) {
+        warn!("sys_unshare: namespace flags detected, stub support only");
+    }
+
+    Ok(0)
+}
