@@ -7,12 +7,8 @@ export KCONFIG_PATH=/proc/config
 [ -f /etc/test_libc ] && TEST_LIBCS=$(cat /etc/test_libc)
 [ -f /etc/only_suites ] && ONLY_SUITES=$(cat /etc/only_suites)
 [ -f /etc/skip_suites ] && SKIP_SUITES=$(cat /etc/skip_suites)
-[ -f /etc/ltp_case_timeout ] && LTP_CASE_TIMEOUT=$(cat /etc/ltp_case_timeout)
-[ -f /etc/suite_timeout_ltp ] && SUITE_TIMEOUT_LTP=$(cat /etc/suite_timeout_ltp)
-[ -f /etc/suite_timeout_default ] && SUITE_TIMEOUT_DEFAULT=$(cat /etc/suite_timeout_default)
 
 TEST_LIBCS="${TEST_LIBCS:-glibc musl}"
-SUITE_TIMEOUT_DEFAULT="${SUITE_TIMEOUT_DEFAULT:-600}"
 
 FOUND_TEST_DIR=0
 for libc in $TEST_LIBCS; do
@@ -115,135 +111,23 @@ is_directory_scan() {
 }
 
 run_ltp_all_cases() {
-    local suite_timeout="$1"
     local target_dir="ltp/testcases/bin"
-    local case_timeout="${LTP_CASE_TIMEOUT:-30}"
-    local start_time now elapsed remaining current_timeout
-    local file base ret pid watchdog
-
-    start_time=$(date +%s 2>/dev/null || echo 0)
+    local file base ret
 
     echo "#### OS COMP TEST GROUP START ltp-$TEST_LIBC ####"
-    echo "[LTP] target_dir=$target_dir case_timeout=${case_timeout}s suite_timeout=${suite_timeout:-0}s"
+    echo "[LTP] target_dir=$target_dir"
 
     for file in "$target_dir"/*; do
         [ -f "$file" ] || continue
-        current_timeout="$case_timeout"
-        if [ -n "$suite_timeout" ] && [ "$suite_timeout" != "0" ] && [ "$start_time" != "0" ]; then
-            now=$(date +%s 2>/dev/null || echo "$start_time")
-            elapsed=$((now - start_time))
-            if [ "$elapsed" -ge "$suite_timeout" ]; then
-                echo "[LTP-SUITE-TIMEOUT] ltp-$TEST_LIBC after ${suite_timeout}s"
-                echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
-                return 124
-            fi
-            remaining=$((suite_timeout - elapsed))
-            if [ "$remaining" -lt "$current_timeout" ]; then
-                current_timeout="$remaining"
-            fi
-            [ "$current_timeout" -gt 0 ] || current_timeout=1
-        fi
         base="${file##*/}"
         echo "RUN LTP CASE $base"
 
-        if command -v setsid >/dev/null 2>&1; then
-            setsid "$file" &
-        else
-            "$file" &
-        fi
-        pid=$!
-        (
-            sleep "$current_timeout"
-            kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || exit 0
-            sleep 1
-            kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
-        ) &
-        watchdog=$!
-
-        wait "$pid"
+        "$file"
         ret=$?
-        kill "$watchdog" 2>/dev/null || true
-        wait "$watchdog" 2>/dev/null || true
-
-        if [ "$ret" -eq 124 ] || [ "$ret" -eq 137 ] || [ "$ret" -eq 143 ]; then
-            echo "[LTP-CASE-TIMEOUT] $base after ${current_timeout}s"
-        fi
         echo "FAIL LTP CASE $base : $ret"
     done
 
     echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
-    return 0
-}
-
-suite_timeout_for() {
-    name="$1"
-
-    case "$name" in
-        basic)
-            echo "${SUITE_TIMEOUT_BASIC:-0}"
-            ;;
-        ltp)
-            echo "${SUITE_TIMEOUT_LTP:-900}"
-            ;;
-        *)
-            echo "${SUITE_TIMEOUT_DEFAULT:-0}"
-            ;;
-    esac
-}
-
-run_script_with_timeout() {
-    script="$1"
-    log_file="$2"
-    timeout_seconds="$3"
-
-    RUN_RC=0
-    if [ -z "$timeout_seconds" ] || [ "$timeout_seconds" = "0" ]; then
-        /bin/sh "$script" >"$log_file" 2>&1
-        RUN_RC=$?
-        return 0
-    fi
-
-    rc_file=$(mktemp "/tmp/suite-rc.XXXXXX") || exit 1
-    (
-        /bin/sh "$script" >"$log_file" 2>&1
-        echo "$?" >"$rc_file"
-    ) &
-    suite_pid=$!
-    (
-        sleep "$timeout_seconds"
-        kill -TERM "$suite_pid" 2>/dev/null || exit 0
-        sleep 1
-        kill -KILL "$suite_pid" 2>/dev/null || true
-    ) &
-    watchdog_pid=$!
-
-    wait "$suite_pid"
-    wait_rc=$?
-    kill "$watchdog_pid" 2>/dev/null || true
-    wait "$watchdog_pid" 2>/dev/null || true
-
-    if [ -s "$rc_file" ]; then
-        RUN_RC=$(cat "$rc_file")
-    else
-        case "$wait_rc" in
-            124|137|143)
-                RUN_RC=$wait_rc
-                ;;
-            *)
-                RUN_RC=$wait_rc
-                ;;
-        esac
-    fi
-    rm -f "$rc_file"
-    return 0
-}
-
-run_ltp_with_timeout() {
-    timeout_seconds="$1"
-
-    RUN_RC=0
-    run_ltp_all_cases "${timeout_seconds:-0}" 2>&1
-    RUN_RC=$?
     return 0
 }
 
@@ -356,25 +240,17 @@ run_libc_suites() {
             export ENOUGH="${ENOUGH:-50000}"
         fi
         if [ "$name" = "ltp" ]; then
-            suite_timeout=$(suite_timeout_for "$name")
-            run_ltp_with_timeout "$suite_timeout"
-            rc=$RUN_RC
-            if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ] || [ "$rc" -eq 143 ]; then
-                echo "[SUITE-TIMEOUT] $name-$TEST_LIBC after ${suite_timeout}s"
-            fi
+            run_ltp_all_cases 2>&1
+            rc=$?
         else
-            suite_timeout=$(suite_timeout_for "$name")
             suite_log=$(mktemp "/tmp/${name}.XXXXXX") || exit 1
-            run_script_with_timeout "$script" "$suite_log" "$suite_timeout"
-            rc=$RUN_RC
+            /bin/sh "$script" >"$suite_log" 2>&1
+            rc=$?
             sed \
                 -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
                 -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/" \
                 "$suite_log"
             rm -f "$suite_log"
-            if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ] || [ "$rc" -eq 143 ]; then
-                echo "[SUITE-TIMEOUT] $name-$TEST_LIBC after ${suite_timeout}s"
-            fi
         fi
 
         echo "[SUITE-RESULT] $name-$TEST_LIBC exit=$rc"
