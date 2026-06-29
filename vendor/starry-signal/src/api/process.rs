@@ -82,6 +82,9 @@ impl ProcessSignalManager {
         match &self.actions.lock()[signo].disposition {
             SignalDisposition::Ignore => true,
             SignalDisposition::Default => {
+                if signo == Signo::SIGCHLD {
+                    return false;
+                }
                 matches!(signo.default_action(), DefaultSignalAction::Ignore)
             }
             _ => false,
