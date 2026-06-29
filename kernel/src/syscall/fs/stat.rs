@@ -4,7 +4,7 @@ use axerrno::{AxError, AxResult};
 use axfs::FS_CONTEXT;
 use axfs_ng_vfs::Location;
 use linux_raw_sys::general::{
-    __kernel_fsid_t, AT_EMPTY_PATH, R_OK, W_OK, X_OK, stat, statfs, statx,
+    __kernel_fsid_t, AT_EMPTY_PATH, AT_SYMLINK_NOFOLLOW, R_OK, W_OK, X_OK, stat, statfs, statx,
 };
 use starry_vm::{VmMutPtr, VmPtr};
 
@@ -127,7 +127,7 @@ pub fn sys_faccessat2(dirfd: c_int, path: *const c_char, mode: u32, flags: u32) 
         if mode & W_OK != 0 && is_path_on_readonly_mount(loc.absolute_path()?.as_str()) {
             return Err(AxError::ReadOnlyFilesystem);
         }
-        check_search_permission(&loc, uid, gid)?;
+        check_search_permission(path.as_deref(), dirfd, flags, uid, gid)?;
     }
 
     if mode == 0 {
@@ -170,14 +170,39 @@ fn has_permission(perm: u16, owner: u32, group: u32, uid: u32, gid: u32, mode: u
         && (mode & X_OK == 0 || exec_ok)
 }
 
-fn check_search_permission(loc: &Location, uid: u32, gid: u32) -> AxResult {
+fn check_search_permission(
+    path: Option<&str>,
+    dirfd: c_int,
+    flags: u32,
+    uid: u32,
+    gid: u32,
+) -> AxResult {
     if uid == 0 {
         return Ok(());
     }
 
-    let mut dir = loc.parent();
-    while let Some(current) = dir {
-        let metadata = current.metadata()?;
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if path.is_empty() {
+        return Ok(());
+    }
+
+    let path = path.trim_end_matches('/');
+    if path.is_empty() || !path.contains('/') {
+        return Ok(());
+    }
+
+    let resolve_flags = flags & !(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
+    for (idx, ch) in path.char_indices() {
+        if ch != '/' || idx == 0 || idx + 1 >= path.len() {
+            continue;
+        }
+        let prefix = &path[..idx];
+        let Some(dir) = resolve_at(dirfd, Some(prefix), resolve_flags)?.into_file() else {
+            return Err(AxError::PermissionDenied);
+        };
+        let metadata = dir.metadata()?;
         if !has_permission(
             metadata.mode.bits() as u16,
             metadata.uid,
@@ -188,7 +213,6 @@ fn check_search_permission(loc: &Location, uid: u32, gid: u32) -> AxResult {
         ) {
             return Err(AxError::PermissionDenied);
         }
-        dir = current.parent();
     }
     Ok(())
 }
