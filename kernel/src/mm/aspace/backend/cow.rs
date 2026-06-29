@@ -15,7 +15,7 @@ use super::{
     AddrSpace, Backend, BackendOps, PopulateCallback, alloc_frame, dealloc_frame, pages_in,
 };
 
-struct FrameRefCnt(u8);
+struct FrameRefCnt(usize);
 
 impl FrameRefCnt {
     // This function may lock FRAME_TABLE again, so the caller should drop the lock first.
@@ -39,7 +39,7 @@ struct FrameTableRefCount {
 }
 
 impl FrameTableRefCount {
-    const INITIAL_CNT: u8 = 1;
+    const INITIAL_CNT: usize = 1;
 
     const fn new() -> Self {
         Self {
@@ -248,11 +248,10 @@ impl BackendOps for CowBackend {
                         .ok_or(AxError::BadAddress)?;
                     let mut frame = frame.lock();
                     assert!(frame.0 > 0, "referencing unreferenced frame");
-                    frame.0 += 1;
-                    if frame.0 == u8::MAX {
+                    frame.0 = frame.0.checked_add(1).ok_or_else(|| {
                         warn!("frame reference count overflow");
-                        return Err(AxError::BadAddress);
-                    }
+                        AxError::NoMemory
+                    })?;
                     old_pt.protect(vaddr, cow_flags)?;
                     new_pt.map(vaddr, paddr, self.size, cow_flags)?;
                 }
