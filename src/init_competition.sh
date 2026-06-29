@@ -1,11 +1,9 @@
 #!/bin/sh
 
 export HOME=/
+export KCONFIG_PATH=/proc/config
 
-# Read suite controls from files if present (for local testing)
-[ -f /etc/skip_suites ] && SKIP_SUITES=$(cat /etc/skip_suites)
-[ -f /etc/only_suites ] && ONLY_SUITES=$(cat /etc/only_suites)
-[ -f /etc/only_ltp_cases ] && ONLY_LTP_CASES=$(cat /etc/only_ltp_cases)
+# Read libc selection from files if present (for local testing)
 [ -f /etc/test_libc ] && TEST_LIBC=$(cat /etc/test_libc)
 
 TEST_LIBC="${TEST_LIBC:-glibc}"
@@ -22,10 +20,51 @@ fi
 echo "=== Starry OS Competition Mode ==="
 echo "Test dir: $TEST_DIR"
 
+poweroff_after_tests() {
+    echo "=== tests done, powering off ==="
+    sync 2>/dev/null || true
+    if command -v poweroff >/dev/null 2>&1; then
+        poweroff -f >/dev/null 2>&1 || true
+    fi
+    if [ -x /bin/busybox ]; then
+        /bin/busybox poweroff -f >/dev/null 2>&1 || true
+    fi
+    exit 0
+}
+
+mkdir -p /etc
+if [ ! -f /etc/passwd ]; then
+    echo "root:x:0:0:root:/root:/bin/sh" > /etc/passwd
+fi
+if ! grep -q '^nobody:' /etc/passwd 2>/dev/null; then
+    echo "nobody:x:65534:65534:nobody:/:" >> /etc/passwd
+fi
+if [ ! -f /etc/group ]; then
+    echo "root:x:0:" > /etc/group
+fi
+if ! grep -q '^nobody:' /etc/group 2>/dev/null; then
+    echo "nobody:x:65534:" >> /etc/group
+fi
+cat > /etc/protocols <<'EOF'
+hopopt 0 HOPOPT
+ipv6 41 IPv6
+ipv6-route 43 IPv6-Route
+ipv6-frag 44 IPv6-Frag
+esp 50 ESP
+ah 51 AH
+ipv6-icmp 58 IPv6-ICMP
+ipv6-nonxt 59 IPv6-NoNxt
+ipv6-opts 60 IPv6-Opts
+tcp 6 TCP
+udp 17 UDP
+icmp 1 ICMP
+EOF
+
 # ---- dynamic linker setup ----
 LIBC_LIB="$TEST_DIR/lib"
 if [ "$TEST_LIBC" = "glibc" ]; then
-    mkdir -p /lib64
+    export LD_LIBRARY_PATH="$LIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    mkdir -p /lib /lib64
     for loader in \
         ld-linux-riscv64-lp64d.so.1 \
         ld-linux-loongarch-lp64d.so.1
@@ -35,19 +74,38 @@ if [ "$TEST_LIBC" = "glibc" ]; then
             ln -sf "$LIBC_LIB/$loader" "/lib64/$loader"
         fi
     done
-    [ -f "$LIBC_LIB/libc.so.6" ] && ln -sf "$LIBC_LIB/libc.so.6" /lib/
-    [ -f "$LIBC_LIB/libm.so.6" ] && ln -sf "$LIBC_LIB/libm.so.6" /lib/
+    if [ -f "$LIBC_LIB/libc.so.6" ]; then
+        ln -sf "$LIBC_LIB/libc.so.6" /lib/
+        ln -sf "$LIBC_LIB/libc.so.6" /lib64/
+    fi
+    if [ -f "$LIBC_LIB/libm.so.6" ]; then
+        ln -sf "$LIBC_LIB/libm.so.6" /lib/
+        ln -sf "$LIBC_LIB/libm.so.6" /lib64/
+    fi
 else
-    mkdir -p /lib64
+    mkdir -p /lib /lib64
     for loader in \
-        ld-linux-riscv64-lp64d.so.1 \
-        ld-linux-loongarch-lp64d.so.1
+        ld-musl-riscv64.so.1 \
+        ld-musl-loongarch-lp64d.so.1
     do
-        ln -sf "$LIBC_LIB/libc.so" "/lib/$loader"
-        ln -sf "$LIBC_LIB/libc.so" "/lib64/$loader"
+        if [ -f "$LIBC_LIB/$loader" ]; then
+            loader_target="$LIBC_LIB/$loader"
+        elif [ -f "$LIBC_LIB/libc.so" ]; then
+            loader_target="$LIBC_LIB/libc.so"
+        else
+            continue
+        fi
+        [ -e "/lib/$loader" ] || ln -sf "$loader_target" "/lib/$loader"
+        [ -e "/lib64/$loader" ] || ln -sf "$loader_target" "/lib64/$loader"
     done
     ln -sf "$LIBC_LIB/libc.so" /lib/libc.so
 fi
+for lib in "$LIBC_LIB"/*.so*; do
+    [ -f "$lib" ] || continue
+    base="${lib##*/}"
+    ln -sf "$lib" "/lib/$base"
+    ln -sf "$lib" "/lib64/$base"
+done
 
 # The rv test image keeps lmbench wrappers built with an absolute path under
 # /code/lmbench_src/bin/build.  Mirror that path to the mounted test payload so
@@ -73,13 +131,11 @@ fi
 
 if [ -z "$SCRIPTS" ]; then
     echo "[SUMMARY] no testcode scripts found in $TEST_DIR"
-    echo "=== tests done, powering off ==="
-    exit 0
+    poweroff_after_tests
 fi
 
 SUITE_PASS=0
 SUITE_FAIL=0
-SUITE_SKIP=0
 
 # ---- bench-type recognition helpers ----
 is_aggregate() {
@@ -99,97 +155,67 @@ is_directory_scan() {
     [ -d "./$dir" ] && [ -f "./$dir/run-all.sh" ]
 }
 
+run_ltp_all_cases() {
+    local target_dir="ltp/testcases/bin"
+    local case_timeout="${LTP_CASE_TIMEOUT:-5}"
+    local file base ret pid watchdog
+
+    echo "#### OS COMP TEST GROUP START ltp-$TEST_LIBC ####"
+    echo "[LTP] target_dir=$target_dir case_timeout=${case_timeout}s"
+
+    for file in "$target_dir"/*; do
+        [ -f "$file" ] || continue
+        base="${file##*/}"
+        echo "RUN LTP CASE $base"
+
+        "$file" &
+        pid=$!
+        (
+            sleep "$case_timeout"
+            kill -TERM "$pid" 2>/dev/null || exit 0
+            sleep 1
+            kill -KILL "$pid" 2>/dev/null || true
+        ) &
+        watchdog=$!
+
+        wait "$pid"
+        ret=$?
+        kill "$watchdog" 2>/dev/null || true
+        wait "$watchdog" 2>/dev/null || true
+
+        if [ "$ret" -eq 124 ] || [ "$ret" -eq 137 ] || [ "$ret" -eq 143 ]; then
+            echo "[LTP-CASE-TIMEOUT] $base after ${case_timeout}s"
+        fi
+        echo "FAIL LTP CASE $base : $ret"
+    done
+
+    echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
+    return 0
+}
+
 for script in $SCRIPTS; do
     name="${script%_testcode.sh}"
-    synthetic_basic=0
-    if [ "$name" = "basic" ] && [ ! -e "$script" ] && [ -f ./basic/run-all.sh ]; then
-        synthetic_basic=1
-    fi
     echo "[SUITE-BEGIN] $name"
 
-    # Local testing helper: if ONLY_SUITES is set, run only the listed suites.
-    if [ -n "$ONLY_SUITES" ] && ! echo ",$ONLY_SUITES," | grep -q ",$name,"; then
-        echo "[SUITE-SKIP] $name (filtered by ONLY_SUITES)"
-        SUITE_SKIP=$((SUITE_SKIP + 1))
-        echo "[SUITE-END] $name"
-        continue
-    fi
-
-    # Skip suites listed in SKIP_SUITES (comma-separated)
-    if echo ",$SKIP_SUITES," | grep -q ",$name,"; then
-        echo "[SUITE-SKIP] $name (skipped by SKIP_SUITES)"
-        SUITE_SKIP=$((SUITE_SKIP + 1))
-        echo "[SUITE-END] $name"
-        continue
-    fi
-
-    if [ "$synthetic_basic" -eq 0 ] && [ ! -x "$script" ]; then
-        echo "[SUITE-SKIP] $name (not executable)"
-        SUITE_SKIP=$((SUITE_SKIP + 1))
-        echo "[SUITE-END] $name"
-        continue
-    fi
-
     # recognize bench type
-    if [ "$name" = "ltp" ] && [ -x "$LTPROOT/runltp" ]; then
+    if is_aggregate "$name"; then
+        echo "[SUITE-TYPE] aggregate"
+    elif is_directory_scan "$name"; then
         echo "[SUITE-TYPE] directory-scan"
-        export LTPROOT
-        export PATH="$LTPROOT/testcases/bin:$PATH"
-        # Build a short high-pass whitelist instead of scenario_groups/default.
-        # Goal: finish quickly and leave time for later suites.
-        LTP_ALLTESTS="$LTPROOT/alltests"
-        : > "$LTP_ALLTESTS"
-        LTP_CASES="$ONLY_LTP_CASES"
-        if [ -z "$LTP_CASES" ]; then
-            LTP_CASES="chmod01 chmod03 chdir01 access03 accept01 accept03 clock_getres01 clock_nanosleep04 alarm02 alarm03 alarm06 alarm07 chown05 chroot03 abort01 accept4_01 bind01 bind03 chown02 access01 access02 writev01 getpid01 getppid01 getuid01 geteuid01 getgid01 getegid01 uname01 dup01 dup3_01 pipe01 pipe2_01"
-        fi
-        for case in $LTP_CASES
-        do
-            for scenfile in syscalls fs; do
-                f="$LTPROOT/runtest/$scenfile"
-                [ -f "$f" ] || continue
-                grep -E "^${case}[[:space:]]" "$f" >> "$LTP_ALLTESTS" 2>/dev/null || true
-            done
-        done
-        echo "[LTP] whitelist lines: $(wc -l < "$LTP_ALLTESTS" 2>/dev/null)"
-        cd "$LTPROOT" || exit 1
-        mkdir -p output results
-        echo "#### OS COMP TEST GROUP START ltp-$TEST_LIBC ####"
-        rc=0
-        while IFS= read -r line; do
-            case "$line" in ''|'#'*) continue;; esac
-            tname=$(printf '%s\n' "$line" | awk '{print $1}')
-            tcmd=$(printf '%s\n' "$line" | cut -d' ' -f2-)
-            [ -z "$tname" ] && continue
-            [ -z "$tcmd" ] && continue
-            echo "RUN LTP CASE $tname"
-            timeout 30 sh -c "$tcmd"
-            tret=$?
-            echo "FAIL LTP CASE $tname : $tret"
-            [ "$tret" -ne 0 ] && rc=1
-        done < "$LTP_ALLTESTS"
-        echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
-        cd "$TEST_DIR" || exit 1
-        rm -f "$LTP_ALLTESTS"
     else
-        if is_aggregate "$name"; then
-            echo "[SUITE-TYPE] aggregate"
-        elif is_directory_scan "$name"; then
-            echo "[SUITE-TYPE] directory-scan"
-        else
-            echo "[SUITE-TYPE] standalone"
-        fi
+        echo "[SUITE-TYPE] standalone"
+    fi
 
+    if [ "$name" = "lmbench" ]; then
+        export ENOUGH="${ENOUGH:-50000}"
+    fi
+    if [ "$name" = "ltp" ]; then
+        run_ltp_all_cases 2>&1
+        rc=$?
+    else
         suite_log=$(mktemp "/tmp/${name}.XXXXXX") || exit 1
-        if [ "$synthetic_basic" -eq 1 ]; then
-            cd ./basic || exit 1
-            /bin/sh ./run-all.sh >"$suite_log" 2>&1
-            rc=$?
-            cd "$TEST_DIR" || exit 1
-        else
-            /bin/sh "$script" >"$suite_log" 2>&1
-            rc=$?
-        fi
+        /bin/sh "$script" >"$suite_log" 2>&1
+        rc=$?
         sed \
             -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
             -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/" \
@@ -206,5 +232,5 @@ for script in $SCRIPTS; do
     echo "[SUITE-END] $name"
 done
 
-echo "[SUMMARY] suites=$((SUITE_PASS + SUITE_FAIL + SUITE_SKIP)) pass=$SUITE_PASS fail=$SUITE_FAIL skip=$SUITE_SKIP"
-echo "=== tests done, powering off ==="
+echo "[SUMMARY] suites=$((SUITE_PASS + SUITE_FAIL)) pass=$SUITE_PASS fail=$SUITE_FAIL skip=0"
+poweroff_after_tests
