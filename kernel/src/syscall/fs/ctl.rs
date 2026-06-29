@@ -23,6 +23,8 @@ use crate::{
     time::TimeValueLike,
 };
 
+use super::mount::is_path_on_readonly_mount;
+
 /// The ioctl() system call manipulates the underlying device parameters
 /// of special files.
 pub fn sys_ioctl(fd: i32, cmd: u32, arg: usize) -> AxResult<isize> {
@@ -120,6 +122,13 @@ pub fn sys_chroot(path: *const c_char) -> AxResult<isize> {
     let loc = fs.resolve(path)?;
     if loc.node_type() != NodeType::Directory {
         return Err(AxError::NotADirectory);
+    }
+    let curr = current();
+    let uid = curr.as_thread().proc_data.uid();
+    let gid = curr.as_thread().proc_data.gid();
+    ensure_execute_permission(&loc, uid, gid)?;
+    if uid != 0 {
+        return Err(AxError::from(LinuxError::EPERM));
     }
     *fs = FsContext::new(loc);
     Ok(0)
@@ -407,6 +416,23 @@ pub fn sys_fchownat(
         .into_file()
         .ok_or(AxError::BadFileDescriptor)?;
     let meta = loc.metadata()?;
+    let curr = current();
+    let curr_uid = curr.as_thread().proc_data.uid();
+    let curr_gid = curr.as_thread().proc_data.gid();
+
+    if is_path_on_readonly_mount(loc.absolute_path()?.as_str()) {
+        return Err(AxError::ReadOnlyFilesystem);
+    }
+    check_path_prefix_search_permission(path.as_deref(), dirfd, flags, curr_uid, curr_gid)?;
+    let uid = if uid == -1 { meta.uid } else { uid as _ };
+    let gid = if gid == -1 { meta.gid } else { gid as _ };
+    if curr_uid != 0 {
+        let owner_unchanged = uid == meta.uid;
+        let group_allowed = gid == meta.gid || gid == curr_gid;
+        if curr_uid != meta.uid || !owner_unchanged || !group_allowed {
+            return Err(AxError::from(LinuxError::EPERM));
+        }
+    }
 
     let mut mode = meta.mode;
     // chown always clears the setuid bits
@@ -416,8 +442,6 @@ pub fn sys_fchownat(
         mode.remove(NodePermission::SET_GID);
     }
 
-    let uid = if uid == -1 { meta.uid } else { uid as _ };
-    let gid = if gid == -1 { meta.gid } else { gid as _ };
     loc.update_metadata(MetadataUpdate {
         owner: Some((uid, gid)),
         mode: Some(mode),
@@ -444,6 +468,13 @@ pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> A
     let curr = current();
     let uid = curr.as_thread().proc_data.uid();
     let gid = curr.as_thread().proc_data.gid();
+    if is_path_on_readonly_mount(loc.absolute_path()?.as_str()) {
+        return Err(AxError::ReadOnlyFilesystem);
+    }
+    check_path_prefix_search_permission(path.as_deref(), dirfd, flags, uid, gid)?;
+    if uid != 0 && uid != meta.uid {
+        return Err(AxError::from(LinuxError::EPERM));
+    }
     let mut mode = NodePermission::from_bits_truncate(mode as u16);
     if uid != 0 && gid != meta.gid {
         mode.remove(NodePermission::SET_GID);
@@ -454,6 +485,65 @@ pub fn sys_fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: u32) -> A
         ..Default::default()
     })?;
     Ok(0)
+}
+
+fn has_execute_permission(mode: u16, owner: u32, group: u32, uid: u32, gid: u32) -> bool {
+    if uid == 0 {
+        true
+    } else if uid == owner {
+        (mode & 0o100) != 0
+    } else if gid == group {
+        (mode & 0o010) != 0
+    } else {
+        (mode & 0o001) != 0
+    }
+}
+
+fn ensure_execute_permission(loc: &axfs_ng_vfs::Location, uid: u32, gid: u32) -> AxResult<()> {
+    if uid == 0 {
+        return Ok(());
+    }
+    let meta = loc.metadata()?;
+    if has_execute_permission(meta.mode.bits(), meta.uid, meta.gid, uid, gid) {
+        Ok(())
+    } else {
+        Err(AxError::from(LinuxError::EACCES))
+    }
+}
+
+fn check_path_prefix_search_permission(
+    path: Option<&str>,
+    dirfd: c_int,
+    flags: u32,
+    uid: u32,
+    gid: u32,
+) -> AxResult<()> {
+    if uid == 0 {
+        return Ok(());
+    }
+    let Some(path) = path else {
+        return Ok(());
+    };
+    if path.is_empty() {
+        return Ok(());
+    }
+
+    let path = path.trim_end_matches('/');
+    if path.is_empty() || !path.contains('/') {
+        return Ok(());
+    }
+
+    let resolve_flags = flags & !(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
+    for (idx, ch) in path.char_indices() {
+        if ch != '/' || idx == 0 || idx + 1 >= path.len() {
+            continue;
+        }
+        let Some(dir) = resolve_at(dirfd, Some(&path[..idx]), resolve_flags)?.into_file() else {
+            return Err(AxError::from(LinuxError::EACCES));
+        };
+        ensure_execute_permission(&dir, uid, gid)?;
+    }
+    Ok(())
 }
 
 fn update_times(
