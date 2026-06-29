@@ -55,5 +55,5 @@ low-memory-size = 0x1000_0000 # uint
 max-cpu-num = 1 # uint
 phys-boot-offset = "0x9000_0000_0000_0000" # uint
 phys-bus-offset = 0 # uint
-phys-memory-size = 1073741824 # uint
+phys-memory-size = 0x1000_0000 # uint
 phys-virt-offset = "0xffff_8000_0000_0000" # uint

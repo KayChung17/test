@@ -3,23 +3,27 @@
 export HOME=/
 export KCONFIG_PATH=/proc/config
 
-# Read libc selection from files if present (for local testing)
-[ -f /etc/test_libc ] && TEST_LIBC=$(cat /etc/test_libc)
+# Read libc and suite selection from files if present (for local testing).
+[ -f /etc/test_libc ] && TEST_LIBCS=$(cat /etc/test_libc)
 [ -f /etc/only_suites ] && ONLY_SUITES=$(cat /etc/only_suites)
 
-TEST_LIBC="${TEST_LIBC:-glibc}"
-TEST_DIR="/oscomp/$TEST_LIBC"
-LTPROOT="$TEST_DIR/ltp"
+TEST_LIBCS="${TEST_LIBCS:-glibc musl}"
 
-if [ ! -d "$TEST_DIR" ]; then
+FOUND_TEST_DIR=0
+for libc in $TEST_LIBCS; do
+    if [ -d "/oscomp/$libc" ]; then
+        FOUND_TEST_DIR=1
+    fi
+done
+
+if [ "$FOUND_TEST_DIR" -eq 0 ]; then
     echo "=== Starry OS ==="
-    echo "Test dir not found: $TEST_DIR"
+    echo "Test dirs not found under /oscomp for: $TEST_LIBCS"
     cd /root
     exec sh --login
 fi
 
 echo "=== Starry OS Competition Mode ==="
-echo "Test dir: $TEST_DIR"
 
 poweroff_after_tests() {
     echo "=== tests done, powering off ==="
@@ -87,66 +91,6 @@ link_glibc_runtime() {
 
 # Some payload directories mix libc families: for example, several musl/basic
 # binaries still request the glibc interpreter. Keep both runtimes available.
-link_glibc_runtime
-
-if [ "$TEST_LIBC" = "glibc" ]; then
-    export LD_LIBRARY_PATH="$LIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-else
-    export LD_LIBRARY_PATH="$LIBC_LIB:$GLIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    for loader in \
-        ld-musl-riscv64.so.1 \
-        ld-musl-riscv64-sf.so.1 \
-        ld-musl-loongarch-lp64d.so.1
-    do
-        if [ -f "$LIBC_LIB/$loader" ]; then
-            loader_target="$LIBC_LIB/$loader"
-        elif [ -f "$LIBC_LIB/libc.so" ]; then
-            loader_target="$LIBC_LIB/libc.so"
-        else
-            continue
-        fi
-        [ -e "/lib/$loader" ] || ln -sf "$loader_target" "/lib/$loader"
-        [ -e "/lib64/$loader" ] || ln -sf "$loader_target" "/lib64/$loader"
-    done
-    ln -sf "$LIBC_LIB/libc.so" /lib/libc.so
-fi
-for lib in "$LIBC_LIB"/*.so*; do
-    [ -f "$lib" ] || continue
-    base="${lib##*/}"
-    ln -sf "$lib" "/lib/$base"
-    ln -sf "$lib" "/lib64/$base"
-done
-
-# The rv test image keeps lmbench wrappers built with an absolute path under
-# /code/lmbench_src/bin/build.  Mirror that path to the mounted test payload so
-# lat_proc shell and direct wrapper invocations exercise the benchmark instead
-# of failing with ENOENT.
-if [ -x "$TEST_DIR/lmbench_all" ]; then
-    mkdir -p /code/lmbench_src/bin/build
-    ln -sf "$TEST_DIR/lmbench_all" /code/lmbench_src/bin/build/lmbench_all
-fi
-
-cd "$TEST_DIR"
-
-# Avoid pager pauses during verbose test output.
-stty rows 1000 cols 200 >/dev/null 2>&1 || true
-export PAGER=cat
-export TERM=dumb
-
-# ---- scan for test entry points ----
-SCRIPTS=$(ls *_testcode.sh 2>/dev/null | sort)
-if [ -d ./basic ] && [ -f ./basic/run-all.sh ] && ! echo "$SCRIPTS" | grep -q '^basic_testcode.sh$'; then
-    SCRIPTS="basic_testcode.sh $SCRIPTS"
-fi
-
-if [ -z "$SCRIPTS" ]; then
-    echo "[SUMMARY] no testcode scripts found in $TEST_DIR"
-    poweroff_after_tests
-fi
-
-SUITE_PASS=0
-SUITE_FAIL=0
-
 # ---- bench-type recognition helpers ----
 is_aggregate() {
     # aggregate = script-driven batch bench whose run-all.sh lives in
@@ -203,51 +147,135 @@ run_ltp_all_cases() {
     return 0
 }
 
-for script in $SCRIPTS; do
-    name="${script%_testcode.sh}"
-    if [ -n "$ONLY_SUITES" ]; then
-        case " $ONLY_SUITES " in
-            *" $name "*) ;;
-            *) continue ;;
-        esac
+run_libc_suites() {
+    TEST_LIBC="$1"
+    TEST_DIR="/oscomp/$TEST_LIBC"
+    LTPROOT="$TEST_DIR/ltp"
+    export TEST_LIBC TEST_DIR LTPROOT
+
+    if [ ! -d "$TEST_DIR" ]; then
+        echo "[SUMMARY] skip $TEST_LIBC: test dir not found: $TEST_DIR"
+        return 0
     fi
 
-    echo "[SUITE-BEGIN] $name"
+    echo "Test dir: $TEST_DIR"
 
-    # recognize bench type
-    if is_aggregate "$name"; then
-        echo "[SUITE-TYPE] aggregate"
-    elif is_directory_scan "$name"; then
-        echo "[SUITE-TYPE] directory-scan"
+    LIBC_LIB="$TEST_DIR/lib"
+    GLIBC_LIB="/oscomp/glibc/lib"
+    link_glibc_runtime
+
+    if [ "$TEST_LIBC" = "glibc" ]; then
+        export LD_LIBRARY_PATH="$LIBC_LIB:/lib:/lib64"
     else
-        echo "[SUITE-TYPE] standalone"
+        export LD_LIBRARY_PATH="$LIBC_LIB:$GLIBC_LIB:/lib:/lib64"
+        for loader in \
+            ld-musl-riscv64.so.1 \
+            ld-musl-riscv64-sf.so.1 \
+            ld-musl-loongarch-lp64d.so.1
+        do
+            if [ -f "$LIBC_LIB/$loader" ]; then
+                loader_target="$LIBC_LIB/$loader"
+            elif [ -f "$LIBC_LIB/libc.so" ]; then
+                loader_target="$LIBC_LIB/libc.so"
+            else
+                continue
+            fi
+            ln -sf "$loader_target" "/lib/$loader"
+            ln -sf "$loader_target" "/lib64/$loader"
+        done
+        [ -f "$LIBC_LIB/libc.so" ] && ln -sf "$LIBC_LIB/libc.so" /lib/libc.so
+    fi
+    for lib in "$LIBC_LIB"/*.so*; do
+        [ -f "$lib" ] || continue
+        base="${lib##*/}"
+        ln -sf "$lib" "/lib/$base"
+        ln -sf "$lib" "/lib64/$base"
+    done
+
+    # The rv test image keeps lmbench wrappers built with an absolute path under
+    # /code/lmbench_src/bin/build. Mirror that path to the mounted test payload.
+    if [ -x "$TEST_DIR/lmbench_all" ]; then
+        mkdir -p /code/lmbench_src/bin/build
+        ln -sf "$TEST_DIR/lmbench_all" /code/lmbench_src/bin/build/lmbench_all
     fi
 
-    if [ "$name" = "lmbench" ]; then
-        export ENOUGH="${ENOUGH:-50000}"
-    fi
-    if [ "$name" = "ltp" ]; then
-        run_ltp_all_cases 2>&1
-        rc=$?
-    else
-        suite_log=$(mktemp "/tmp/${name}.XXXXXX") || exit 1
-        /bin/sh "$script" >"$suite_log" 2>&1
-        rc=$?
-        sed \
-            -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
-            -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/" \
-            "$suite_log"
-        rm -f "$suite_log"
+    cd "$TEST_DIR" || return 1
+
+    # Avoid pager pauses during verbose test output.
+    stty rows 1000 cols 200 >/dev/null 2>&1 || true
+    export PAGER=cat
+    export TERM=dumb
+
+    # ---- scan for test entry points ----
+    SCRIPTS=$(ls *_testcode.sh 2>/dev/null | sort)
+    if [ -d ./basic ] && [ -f ./basic/run-all.sh ] && ! echo "$SCRIPTS" | grep -q '^basic_testcode.sh$'; then
+        SCRIPTS="basic_testcode.sh $SCRIPTS"
     fi
 
-    echo "[SUITE-RESULT] $name exit=$rc"
-    if [ "$rc" -eq 0 ]; then
-        SUITE_PASS=$((SUITE_PASS + 1))
-    else
-        SUITE_FAIL=$((SUITE_FAIL + 1))
+    if [ -z "$SCRIPTS" ]; then
+        echo "[SUMMARY] no testcode scripts found in $TEST_DIR"
+        return 0
     fi
-    echo "[SUITE-END] $name"
+
+    SUITE_PASS=0
+    SUITE_FAIL=0
+
+    for script in $SCRIPTS; do
+        name="${script%_testcode.sh}"
+        if [ -n "$ONLY_SUITES" ]; then
+            case " $ONLY_SUITES " in
+                *" $name "*) ;;
+                *) continue ;;
+            esac
+        fi
+
+        echo "[SUITE-BEGIN] $name-$TEST_LIBC"
+
+        # recognize bench type
+        if is_aggregate "$name"; then
+            echo "[SUITE-TYPE] aggregate"
+        elif is_directory_scan "$name"; then
+            echo "[SUITE-TYPE] directory-scan"
+        else
+            echo "[SUITE-TYPE] standalone"
+        fi
+
+        if [ "$name" = "lmbench" ]; then
+            export ENOUGH="${ENOUGH:-50000}"
+        fi
+        if [ "$name" = "ltp" ]; then
+            run_ltp_all_cases 2>&1
+            rc=$?
+        else
+            suite_log=$(mktemp "/tmp/${name}.XXXXXX") || exit 1
+            /bin/sh "$script" >"$suite_log" 2>&1
+            rc=$?
+            sed \
+                -e "s/^#### OS COMP TEST GROUP START ${name} ####$/#### OS COMP TEST GROUP START ${name}-$TEST_LIBC ####/" \
+                -e "s/^#### OS COMP TEST GROUP END ${name} ####$/#### OS COMP TEST GROUP END ${name}-$TEST_LIBC ####/" \
+                "$suite_log"
+            rm -f "$suite_log"
+        fi
+
+        echo "[SUITE-RESULT] $name-$TEST_LIBC exit=$rc"
+        if [ "$rc" -eq 0 ]; then
+            SUITE_PASS=$((SUITE_PASS + 1))
+        else
+            SUITE_FAIL=$((SUITE_FAIL + 1))
+        fi
+        echo "[SUITE-END] $name-$TEST_LIBC"
+    done
+
+    echo "[SUMMARY] $TEST_LIBC suites=$((SUITE_PASS + SUITE_FAIL)) pass=$SUITE_PASS fail=$SUITE_FAIL skip=0"
+    TOTAL_PASS=$((TOTAL_PASS + SUITE_PASS))
+    TOTAL_FAIL=$((TOTAL_FAIL + SUITE_FAIL))
+}
+
+TOTAL_PASS=0
+TOTAL_FAIL=0
+for libc in $TEST_LIBCS; do
+    run_libc_suites "$libc"
 done
 
-echo "[SUMMARY] suites=$((SUITE_PASS + SUITE_FAIL)) pass=$SUITE_PASS fail=$SUITE_FAIL skip=0"
+echo "[SUMMARY] all suites=$((TOTAL_PASS + TOTAL_FAIL)) pass=$TOTAL_PASS fail=$TOTAL_FAIL skip=0"
 poweroff_after_tests

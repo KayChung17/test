@@ -5,8 +5,8 @@ use axtask::{
     future::{block_on, interruptible, sleep},
 };
 use linux_raw_sys::general::{
-    __kernel_clockid_t, CLOCK_MONOTONIC, CLOCK_REALTIME, PRIO_PGRP, PRIO_PROCESS, PRIO_USER,
-    TIMER_ABSTIME, timespec,
+    __kernel_clockid_t, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_REALTIME,
+    CLOCK_THREAD_CPUTIME_ID, PRIO_PGRP, PRIO_PROCESS, PRIO_USER, TIMER_ABSTIME, timespec,
 };
 use starry_vm::{VmMutPtr, VmPtr, vm_load, vm_write_slice};
 
@@ -17,6 +17,7 @@ struct SchedParam {
 }
 
 use crate::{
+    syscall::time::realtime_now,
     task::{AsThread, get_process_data, get_process_group, get_task},
     time::TimeValueLike,
 };
@@ -64,8 +65,12 @@ pub fn sys_clock_nanosleep(
     rem: *mut timespec,
 ) -> AxResult<isize> {
     let clock = match clock_id as u32 {
-        CLOCK_REALTIME => axhal::time::wall_time,
+        CLOCK_REALTIME => realtime_now,
         CLOCK_MONOTONIC => axhal::time::monotonic_time,
+        CLOCK_PROCESS_CPUTIME_ID | CLOCK_THREAD_CPUTIME_ID => {
+            warn!("Unsupported clock_id: {clock_id}");
+            return Err(AxError::OperationNotSupported);
+        }
         _ => {
             warn!("Unsupported clock_id: {clock_id}");
             return Err(AxError::InvalidInput);

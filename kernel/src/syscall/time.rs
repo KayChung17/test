@@ -1,5 +1,9 @@
+use core::sync::atomic::{AtomicI64, Ordering};
+
 use axerrno::{AxError, AxResult, LinuxError};
-use axhal::time::{TimeValue, monotonic_time, monotonic_time_nanos, nanos_to_ticks, wall_time};
+use axhal::time::{
+    TimeValue, monotonic_time, monotonic_time_nanos, nanos_to_ticks, wall_time as platform_wall_time,
+};
 use axtask::current;
 use linux_raw_sys::general::{
     __kernel_clockid_t, CLOCK_BOOTTIME, CLOCK_MONOTONIC, CLOCK_MONOTONIC_COARSE,
@@ -32,6 +36,24 @@ const ADJ_VALID_MODE_BITS: u32 = ADJ_OFFSET
 const ADJ_MUTATING_MODES: u32 = ADJ_VALID_MODE_BITS | ADJ_OFFSET_SINGLESHOT;
 const MIN_TICK: isize = 9_000;
 const MAX_TICK: isize = 11_000;
+static REALTIME_OFFSET_NANOS: AtomicI64 = AtomicI64::new(0);
+
+pub(crate) fn realtime_now() -> TimeValue {
+    apply_realtime_offset(platform_wall_time())
+}
+
+fn apply_realtime_offset(base: TimeValue) -> TimeValue {
+    let nanos = base.as_nanos() as i128 + REALTIME_OFFSET_NANOS.load(Ordering::Relaxed) as i128;
+    TimeValue::from_nanos(nanos.clamp(0, u64::MAX as i128) as u64)
+}
+
+fn set_realtime(value: TimeValue) {
+    let offset = value.as_nanos() as i128 - platform_wall_time().as_nanos() as i128;
+    REALTIME_OFFSET_NANOS.store(
+        offset.clamp(i64::MIN as i128, i64::MAX as i128) as i64,
+        Ordering::Relaxed,
+    );
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -98,7 +120,7 @@ pub fn sys_clock_adjtime(clock_id: __kernel_clockid_t, buf: *mut Timex) -> AxRes
 
     timex = Timex {
         modes: timex.modes,
-        time: timeval::from_time_value(wall_time()),
+        time: timeval::from_time_value(realtime_now()),
         tick: 10_000,
         ..Timex::zeroed()
     };
@@ -112,7 +134,7 @@ pub fn sys_adjtimex(buf: *mut Timex) -> AxResult<isize> {
 
 pub fn sys_clock_gettime(clock_id: __kernel_clockid_t, ts: *mut timespec) -> AxResult<isize> {
     let now = match clock_id as u32 {
-        CLOCK_REALTIME | CLOCK_REALTIME_COARSE => wall_time(),
+        CLOCK_REALTIME | CLOCK_REALTIME_COARSE => realtime_now(),
         CLOCK_MONOTONIC | CLOCK_MONOTONIC_RAW | CLOCK_MONOTONIC_COARSE | CLOCK_BOOTTIME => {
             monotonic_time()
         }
@@ -134,15 +156,16 @@ pub fn sys_clock_settime(clock_id: __kernel_clockid_t, ts: *const timespec) -> A
         return Err(AxError::InvalidInput);
     }
     let ts = unsafe { ts.vm_read_uninit()?.assume_init() };
-    let _ = ts.try_into_time_value()?;
+    let value = ts.try_into_time_value()?;
     if current().as_thread().proc_data.uid() != 0 {
         return Err(AxError::from(LinuxError::EPERM));
     }
+    set_realtime(value);
     Ok(0)
 }
 
 pub fn sys_gettimeofday(ts: *mut timeval) -> AxResult<isize> {
-    ts.vm_write(timeval::from_time_value(wall_time()))?;
+    ts.vm_write(timeval::from_time_value(realtime_now()))?;
     Ok(0)
 }
 

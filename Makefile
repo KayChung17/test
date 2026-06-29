@@ -1,7 +1,7 @@
 # Build Options
 export ARCH := riscv64
 export LOG := warn
-export DWARF := y
+export DWARF ?= n
 export MEMTRACK := n
 export CARGO_TARGET_DIR := $(PWD)/target
 export CARGO_NET_OFFLINE := true
@@ -39,7 +39,7 @@ ifeq ($(COMPETITION), y)
 endif
 
 default: build
-all: kernel-rv kernel-la disk.img
+all: kernel-rv kernel-la disk-rv.img disk-la.img disk.img
 
 ROOTFS_IMG = rootfs-$(ARCH).img
 ROOTFS_SIZE_MB ?= 128
@@ -61,16 +61,16 @@ rootfs:
 	source_img=""; \
 	if [ -f make/disk.img ]; then \
 		echo "Rootfs ready: make/disk.img"; \
+	elif [ -f $(ROOTFS_SOURCE_DIR)/bin/busybox ] && ls $(ROOTFS_SOURCE_DIR)/lib/ld-musl-*.so.1 >/dev/null 2>&1 && [ -f $(ROOTFS_SOURCE_DIR)/etc/passwd ] && [ -f $(ROOTFS_SOURCE_DIR)/etc/group ]; then \
+		echo "Generating auxiliary rootfs from $(ROOTFS_SOURCE_DIR) ..."; \
+		scripts/gen-aux-img.sh --from-dir "$(ROOTFS_SOURCE_DIR)" make/disk.img $(ROOTFS_SIZE_MB); \
+		echo "Auxiliary rootfs ready: make/disk.img"; \
 	elif [ -f disk.img ]; then \
 		cp disk.img make/disk.img; \
 		echo "Rootfs ready: make/disk.img"; \
 	elif [ -f $(ROOTFS_IMG) ]; then \
 		cp $(ROOTFS_IMG) make/disk.img; \
 		echo "Rootfs ready: make/disk.img"; \
-	elif [ -f $(ROOTFS_SOURCE_DIR)/bin/busybox ] && ls $(ROOTFS_SOURCE_DIR)/lib/ld-musl-*.so.1 >/dev/null 2>&1 && [ -f $(ROOTFS_SOURCE_DIR)/etc/passwd ] && [ -f $(ROOTFS_SOURCE_DIR)/etc/group ]; then \
-		echo "Generating auxiliary rootfs from $(ROOTFS_SOURCE_DIR) ..."; \
-		scripts/gen-aux-img.sh --from-dir "$(ROOTFS_SOURCE_DIR)" make/disk.img $(ROOTFS_SIZE_MB); \
-		echo "Auxiliary rootfs ready: make/disk.img"; \
 	else \
 		for candidate in $(ROOTFS_TEST_IMG_CANDIDATES); do \
 			if [ -n "$$candidate" ] && [ -f "$$candidate" ]; then \
@@ -117,7 +117,7 @@ kernel-rv: defconfig
 	cp "$$latest" $@
 
 kernel-la: defconfig
-	@$(MAKE) ARCH=loongarch64 COMPETITION=y build
+	@$(MAKE) ARCH=loongarch64 COMPETITION=y build LD_SCRIPT=$(abspath configs/linker_loongarch64-qemu-virt_eval.lds)
 	@latest=$$(ls -t ./*_loongarch64-*.elf 2>/dev/null | head -n 1); \
 	if [ -z "$$latest" ]; then \
 		echo "No LoongArch ELF artifact found"; \
@@ -125,8 +125,18 @@ kernel-la: defconfig
 	fi; \
 	cp "$$latest" $@
 
-disk.img: make/disk.img
+disk-rv.img:
+	@rm -f make/disk.img
+	@$(MAKE) --no-print-directory rootfs ARCH=riscv64 ROOTFS_SOURCE_DIR=rootfs-source/riscv64
 	@cp make/disk.img $@
+
+disk-la.img:
+	@rm -f make/disk.img
+	@$(MAKE) --no-print-directory rootfs ARCH=loongarch64 ROOTFS_SOURCE_DIR=rootfs-source/loongarch64
+	@cp make/disk.img $@
+
+disk.img: disk-rv.img
+	@cp disk-rv.img $@
 
 make/disk.img:
 	@$(MAKE) rootfs
