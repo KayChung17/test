@@ -4,7 +4,7 @@ use axerrno::{AxError, AxResult};
 use axhal::uspace::UserContext;
 use axtask::{TaskInner, current};
 use starry_process::Pid;
-use starry_signal::{SignalInfo, SignalOSAction, SignalSet};
+use starry_signal::{SignalInfo, SignalOSAction, SignalSet, Signo};
 
 use super::{AsThread, Thread, do_exit, get_process_data, get_process_group, get_task};
 
@@ -107,6 +107,16 @@ pub fn send_signal_to_process(pid: Pid, sig: Option<SignalInfo>) -> AxResult<()>
     if let Some(sig) = sig {
         let signo = sig.signo();
         info!("Send signal {signo:?} to process {pid}");
+        if signo == Signo::SIGKILL {
+            for tid in proc_data.proc.threads() {
+                if let Ok(task) = get_task(tid)
+                    && let Some(thread) = task.try_as_thread()
+                {
+                    send_signal_thread_inner(&task, thread, sig.clone());
+                }
+            }
+            return Ok(());
+        }
         if let Some(tid) = proc_data.signal.send_signal(sig)
             && let Ok(task) = get_task(tid)
         {

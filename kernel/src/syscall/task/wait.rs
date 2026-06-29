@@ -123,6 +123,10 @@ pub fn sys_waitpid(pid: i32, exit_code: *mut i32, options: u32) -> AxResult<isiz
 
                 let signal = &proc_data.signal;
                 let pending = curr.as_thread().signal.pending();
+                if pending.has(Signo::SIGKILL) {
+                    return Err(AxError::Interrupted);
+                }
+
                 let should_restart = (1u8..=64).filter_map(Signo::from_repr).any(|signo| {
                     pending.has(signo)
                         && signo != Signo::SIGCHLD
