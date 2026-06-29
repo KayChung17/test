@@ -29,3 +29,5 @@ issue.md
 测评结果.md
 submit_riscv64-qemu-virt.bin
 submit_riscv64-qemu-virt.elf
+submit_loongarch64-qemu-virt.bin
+submit_loongarch64-qemu-virt.elf

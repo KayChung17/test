@@ -83,14 +83,35 @@ if [ -z "$LA_IMG" ]; then
 fi
 
 PREP_DIR="$ROOT/tmp/local-evaluator-data"
+PREP_SUBMIT_DIR="$ROOT/tmp/local-evaluator-submit"
 cleanup() {
-    rm -rf "$PREP_DIR"
+    rm -rf "$PREP_DIR" "$PREP_SUBMIT_DIR"
 }
 trap cleanup EXIT
 
-rm -rf "$PREP_DIR"
-mkdir -p "$PREP_DIR"
+rm -rf "$PREP_DIR" "$PREP_SUBMIT_DIR"
+mkdir -p "$PREP_DIR" "$PREP_SUBMIT_DIR"
 cp -a "$TESTDATA_DIR/." "$PREP_DIR/"
+
+rsync -a --delete \
+    --exclude='.git/' \
+    --exclude='.claude/' \
+    --exclude='target/' \
+    --exclude='tmp/' \
+    --exclude='disk.img' \
+    --exclude='kernel-rv' \
+    --exclude='kernel-la' \
+    --exclude='sdcard-rv.img' \
+    --exclude='sdcard-la.img' \
+    --exclude='disk-rv.img' \
+    --exclude='disk-la.img' \
+    --exclude='os_serial_out_rv.txt' \
+    --exclude='os_serial_out_la.txt' \
+    --exclude='submit_riscv64-qemu-virt.bin' \
+    --exclude='submit_riscv64-qemu-virt.elf' \
+    --exclude='submit_loongarch64-qemu-virt.bin' \
+    --exclude='submit_loongarch64-qemu-virt.elf' \
+    "$ROOT/" "$PREP_SUBMIT_DIR/"
 mkdir -p "$HOOK_DIR"
 mkdir -p "$PREP_DIR/cghook"
 
@@ -121,7 +142,7 @@ fi
 
 DOCKER_BASE=(
     docker run --rm -i
-    -v "$ROOT:/coursegrader/submit"
+    -v "$PREP_SUBMIT_DIR:/coursegrader/submit"
     -v "$PREP_DIR:/coursegrader/testdata"
     -v "$AUTOTEST_REPO:/home/cguser"
     -v "$HOOK_DIR:/mnt/cghook"
@@ -149,4 +170,31 @@ else
     echo "[local-evaluator] using LA image: ${LA_IMG:-<from existing .gz>}"
     ls -lh "$PREP_DIR"/sdcard-rv.img.gz "$PREP_DIR"/sdcard-la.img.gz
     "${DOCKER_BASE[@]}" python3 .
+    echo "[local-evaluator] recomputing suite summary"
+    python3 - <<PY
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(r"$AUTOTEST_REPO") / "kernel"))
+from run import parse_serial_out_new
+from postwork import build_table
+
+config = {'testcase_dir': r"$TESTDATA_DIR"}
+rv_log = Path(r"$PREP_SUBMIT_DIR") / 'os_serial_out_rv.txt'
+la_log = Path(r"$PREP_SUBMIT_DIR") / 'os_serial_out_la.txt'
+rv = parse_serial_out_new(config, str(rv_log))
+la = parse_serial_out_new(config, str(la_log))
+summary = {'rv': rv, 'la': la}
+wanted = ['basic-glibc','busybox-glibc','cyclictest-glibc','iozone-glibc','iperf-glibc','libcbench-glibc','libctest-glibc','lmbench-glibc','ltp-glibc','lua-glibc','netperf-glibc','unixbench-glibc']
+print('LOCAL_SUITE_SUMMARY')
+total = 0.0
+for g in wanted:
+    s, _ = build_table(g, ['rv','la'], summary)
+    rv_score = s.get('rv', 0)
+    la_score = s.get('la', 0)
+    suite_total = s.get('#TOTAL', 0)
+    total += suite_total
+    point = g.split('-', 1)[0]
+    print(f'{point}\trv={rv_score}\tla={la_score}\ttotal={suite_total}')
+print(f'LOCAL_TOTAL\t{total}')
+PY
 fi
