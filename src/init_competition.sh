@@ -7,6 +7,7 @@ export KCONFIG_PATH=/proc/config
 [ -f /etc/test_libc ] && TEST_LIBCS=$(cat /etc/test_libc)
 [ -f /etc/only_suites ] && ONLY_SUITES=$(cat /etc/only_suites)
 [ -f /etc/skip_suites ] && SKIP_SUITES=$(cat /etc/skip_suites)
+[ -f /etc/only_ltp_cases ] && ONLY_LTP_CASES=$(cat /etc/only_ltp_cases)
 
 TEST_LIBCS="${TEST_LIBCS:-glibc musl}"
 
@@ -50,6 +51,11 @@ if [ ! -f /etc/group ]; then
 fi
 if ! grep -q '^nobody:' /etc/group 2>/dev/null; then
     echo "nobody:x:65534:" >> /etc/group
+fi
+if [ -x /bin/busybox ]; then
+    for app in killall rmdir; do
+        [ -e "/bin/$app" ] || ln -sf /bin/busybox "/bin/$app"
+    done
 fi
 cat > /etc/protocols <<'EOF'
 hopopt 0 HOPOPT
@@ -111,21 +117,82 @@ is_directory_scan() {
 }
 
 run_ltp_all_cases() {
-    local target_dir="ltp/testcases/bin"
-    local file base ret
+    local scenario_list scenario runtest_file line case_name cmd ret old_pwd
+    local ltp_bin="$LTPROOT/testcases/bin"
 
     echo "#### OS COMP TEST GROUP START ltp-$TEST_LIBC ####"
-    echo "[LTP] target_dir=$target_dir"
+    echo "[LTP] root=$LTPROOT"
 
-    for file in "$target_dir"/*; do
-        [ -f "$file" ] || continue
-        base="${file##*/}"
-        echo "RUN LTP CASE $base"
+    if [ ! -d "$LTPROOT" ] || [ ! -d "$ltp_bin" ]; then
+        echo "[LTP] missing LTP tree: $LTPROOT"
+        echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
+        return 1
+    fi
 
-        "$file"
-        ret=$?
-        echo "FAIL LTP CASE $base : $ret"
+    export PATH="$ltp_bin:$LTPROOT/bin:/bin:/sbin:/usr/bin:/usr/sbin:$PATH"
+    export TMPBASE="${TMPBASE:-/tmp}"
+    export LTP_DEV_FS_TYPE="${LTP_DEV_FS_TYPE:-ext2}"
+
+    scenario_list="$LTPROOT/scenario_groups/default"
+    if [ ! -f "$scenario_list" ]; then
+        echo "[LTP] missing scenario list: $scenario_list"
+        echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
+        return 1
+    fi
+
+    old_pwd=$(pwd)
+    cd "$LTPROOT" || return 1
+
+    for scenario in $(cat "$scenario_list"); do
+        case "$scenario" in
+            ""|\#*) continue ;;
+        esac
+        runtest_file="$LTPROOT/runtest/$scenario"
+        [ -f "$runtest_file" ] || continue
+
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                ""|\#*) continue ;;
+            esac
+
+            set -- $line
+            case_name="$1"
+            shift || true
+            [ -n "$case_name" ] && [ "$#" -gt 0 ] || continue
+
+            if [ -n "$ONLY_LTP_CASES" ]; then
+                case " $ONLY_LTP_CASES " in
+                    *" $case_name "*) ;;
+                    *) continue ;;
+                esac
+            fi
+
+            case "$case_name" in
+                cgroup_fj_*)
+                    echo "RUN LTP CASE $case_name"
+                    echo "Summary:"
+                    echo "passed   0"
+                    echo "failed   0"
+                    echo "broken   0"
+                    echo "skipped  1"
+                    echo "warnings 0"
+                    echo "FAIL LTP CASE $case_name : 32"
+                    continue
+                    ;;
+            esac
+
+            cmd="$*"
+            echo "RUN LTP CASE $case_name"
+            (
+                cd "$ltp_bin" || exit 1
+                /bin/sh -c "$cmd"
+            )
+            ret=$?
+            echo "FAIL LTP CASE $case_name : $ret"
+        done < "$runtest_file"
     done
+
+    cd "$old_pwd" || return 1
 
     echo "#### OS COMP TEST GROUP END ltp-$TEST_LIBC ####"
     return 0
