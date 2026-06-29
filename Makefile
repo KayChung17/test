@@ -53,6 +53,8 @@ LA_ELF_GLOB = *_loongarch64-*.elf
 prepare-cargo-home:
 	@mkdir -p .cargo
 	@cp cargo-config.toml .cargo/config.toml
+	@chmod +x scripts/restore-hidden-vendor-files.sh
+	@./scripts/restore-hidden-vendor-files.sh
 
 rootfs:
 	@set -e; \

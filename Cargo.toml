@@ -99,6 +99,7 @@ axio = { path = "third_party/axio" }
 starry-vm = { path = "third_party/starry-vm" }
 axplat-riscv64-qemu-virt = { path = "third_party/axplat-riscv64-qemu-virt" }
 kernel-elf-parser = { path = "third_party/kernel-elf-parser" }
+lwext4_rust = { path = "third_party/lwext4_rust" }
 
 [package.metadata.vendor-filter]
 platforms = ["riscv64gc-unknown-none-elf", "loongarch64-unknown-none-softfloat"]
