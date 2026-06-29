@@ -5,6 +5,7 @@ export KCONFIG_PATH=/proc/config
 
 # Read libc selection from files if present (for local testing)
 [ -f /etc/test_libc ] && TEST_LIBC=$(cat /etc/test_libc)
+[ -f /etc/only_suites ] && ONLY_SUITES=$(cat /etc/only_suites)
 
 TEST_LIBC="${TEST_LIBC:-glibc}"
 TEST_DIR="/oscomp/$TEST_LIBC"
@@ -204,6 +205,13 @@ run_ltp_all_cases() {
 
 for script in $SCRIPTS; do
     name="${script%_testcode.sh}"
+    if [ -n "$ONLY_SUITES" ]; then
+        case " $ONLY_SUITES " in
+            *" $name "*) ;;
+            *) continue ;;
+        esac
+    fi
+
     echo "[SUITE-BEGIN] $name"
 
     # recognize bench type
