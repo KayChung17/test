@@ -1,4 +1,4 @@
-use alloc::{borrow::Cow, collections::VecDeque, format, sync::Arc, vec, vec::Vec};
+use alloc::{borrow::Cow, format, sync::Arc, vec, vec::Vec};
 use core::{
     ffi::c_int,
     ops::Deref,
@@ -83,18 +83,34 @@ impl Pollable for Socket {
 }
 
 static RAW_SOCKET_ID: AtomicUsize = AtomicUsize::new(1);
-static RAW_IPV6_PACKETS: Mutex<VecDeque<(usize, Vec<u8>)>> = Mutex::new(VecDeque::new());
+static RAW_PACKET_SEQ: AtomicUsize = AtomicUsize::new(0);
+static RAW_IPV6_PACKETS: Mutex<Vec<RawIpv6Packet>> = Mutex::new(Vec::new());
+
+struct RawIpv6Packet {
+    seq: usize,
+    sender: usize,
+    protocol: u32,
+    data: Vec<u8>,
+}
 
 pub struct RawIpv6Socket {
     id: usize,
+    protocol: u32,
+    recv_seq: Mutex<usize>,
     checksum_offset: Mutex<Option<usize>>,
+    icmp6_filter: Mutex<Option<[u32; 8]>>,
+    ipv6_options: Mutex<Vec<(u32, i32)>>,
 }
 
 impl RawIpv6Socket {
-    pub fn new() -> Self {
+    pub fn new(protocol: u32) -> Self {
         Self {
             id: RAW_SOCKET_ID.fetch_add(1, Ordering::Relaxed),
+            protocol,
+            recv_seq: Mutex::new(RAW_PACKET_SEQ.load(Ordering::Relaxed)),
             checksum_offset: Mutex::new(None),
+            icmp6_filter: Mutex::new(None),
+            ipv6_options: Mutex::new(Vec::new()),
         }
     }
 
@@ -110,6 +126,57 @@ impl RawIpv6Socket {
         self.checksum_offset.lock().map_or(-1, |offset| offset as i32)
     }
 
+    pub fn set_icmp6_filter(&self, filter: &[u8]) -> AxResult<()> {
+        if filter.len() != 32 {
+            return Err(AxError::InvalidInput);
+        }
+        let mut raw = [0u32; 8];
+        for (slot, chunk) in raw.iter_mut().zip(filter.chunks_exact(size_of::<u32>())) {
+            *slot = u32::from_ne_bytes(chunk.try_into().unwrap());
+        }
+        *self.icmp6_filter.lock() = Some(raw);
+        Ok(())
+    }
+
+    pub fn set_ipv6_option(&self, optname: u32, value: i32) {
+        let mut options = self.ipv6_options.lock();
+        if let Some((_, current)) = options.iter_mut().find(|(opt, _)| *opt == optname) {
+            *current = value;
+        } else {
+            options.push((optname, value));
+        }
+    }
+
+    pub fn ipv6_option(&self, optname: u32) -> i32 {
+        self.ipv6_options
+            .lock()
+            .iter()
+            .find_map(|(opt, value)| (*opt == optname).then_some(*value))
+            .unwrap_or(0)
+    }
+
+    pub fn cmsg_types(&self) -> Vec<u32> {
+        let options = self.ipv6_options.lock();
+        let mut result = Vec::new();
+        for (opt, value) in options.iter().copied() {
+            if value == 0 {
+                continue;
+            }
+            let ty = match opt {
+                49 => 50, // IPV6_RECVPKTINFO -> IPV6_PKTINFO
+                51 => 52, // IPV6_RECVHOPLIMIT -> IPV6_HOPLIMIT
+                53 => 54, // IPV6_RECVHOPOPTS -> IPV6_HOPOPTS
+                56 => 57, // IPV6_RECVRTHDR -> IPV6_RTHDR
+                58 => 59, // IPV6_RECVDSTOPTS -> IPV6_DSTOPTS
+                66 => 67, // IPV6_RECVTCLASS -> IPV6_TCLASS
+                2 | 3 | 4 | 5 | 8 => opt,
+                _ => continue,
+            };
+            result.push(ty);
+        }
+        result
+    }
+
     pub fn send_packet(&self, src: &mut IoSrc) -> AxResult<usize> {
         let len = src.remaining();
         let mut packet = vec![0; len];
@@ -122,17 +189,39 @@ impl RawIpv6Socket {
             return Err(AxError::InvalidInput);
         }
 
-        RAW_IPV6_PACKETS.lock().push_back((self.id, packet));
+        RAW_IPV6_PACKETS.lock().push(RawIpv6Packet {
+            seq: RAW_PACKET_SEQ.fetch_add(1, Ordering::Relaxed) + 1,
+            sender: self.id,
+            protocol: self.protocol,
+            data: packet,
+        });
         Ok(read)
     }
 
     pub fn recv_packet(&self, dst: &mut IoDst) -> AxResult<usize> {
-        let mut packets = RAW_IPV6_PACKETS.lock();
-        let Some(pos) = packets.iter().position(|(sender, _)| *sender != self.id) else {
+        let packets = RAW_IPV6_PACKETS.lock();
+        let recv_seq = *self.recv_seq.lock();
+        let Some(packet) = packets.iter().find(|packet| {
+            packet.seq > recv_seq
+                && packet.sender != self.id
+                && packet.protocol == self.protocol
+                && self.allows_packet(&packet.data)
+        }) else {
             return Err(AxError::WouldBlock);
         };
-        let (_, packet) = packets.remove(pos).unwrap();
-        dst.write(&packet)
+        *self.recv_seq.lock() = packet.seq;
+        dst.write(&packet.data)
+    }
+
+    fn allows_packet(&self, packet: &[u8]) -> bool {
+        if self.protocol != linux_raw_sys::net::IPPROTO_ICMPV6 || packet.is_empty() {
+            return true;
+        }
+        let Some(filter) = *self.icmp6_filter.lock() else {
+            return true;
+        };
+        let ty = packet[0] as usize;
+        filter[ty / 32] & (1 << (ty % 32)) == 0
     }
 
     pub fn from_fd(fd: c_int) -> AxResult<Arc<Self>> {
@@ -166,10 +255,16 @@ impl FileLike for RawIpv6Socket {
 
 impl Pollable for RawIpv6Socket {
     fn poll(&self) -> IoEvents {
+        let recv_seq = *self.recv_seq.lock();
         let readable = RAW_IPV6_PACKETS
             .lock()
             .iter()
-            .any(|(sender, _)| *sender != self.id);
+            .any(|packet| {
+                packet.seq > recv_seq
+                    && packet.sender != self.id
+                    && packet.protocol == self.protocol
+                    && self.allows_packet(&packet.data)
+            });
         if readable {
             IoEvents::IN | IoEvents::OUT
         } else {

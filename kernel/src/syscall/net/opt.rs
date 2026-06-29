@@ -14,6 +14,8 @@ const PROTO_TCP: u32 = linux_raw_sys::net::IPPROTO_TCP as u32;
 
 const PROTO_IP: u32 = linux_raw_sys::net::IPPROTO_IP as u32;
 const PROTO_IPV6: u32 = linux_raw_sys::net::IPPROTO_IPV6 as u32;
+const PROTO_ICMPV6: u32 = linux_raw_sys::net::IPPROTO_ICMPV6;
+const ICMP6_FILTER: u32 = 1;
 
 static MULTICAST_MEMBERSHIPS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
@@ -147,6 +149,10 @@ pub fn sys_getsockopt(
         *get::<i32>(optval, optlen)? = RawIpv6Socket::from_fd(fd)?.checksum_offset();
         return Ok(0);
     }
+    if level == PROTO_IPV6 && is_raw_ipv6_option(optname) {
+        *get::<i32>(optval, optlen)? = RawIpv6Socket::from_fd(fd)?.ipv6_option(optname);
+        return Ok(0);
+    }
 
     let socket = Socket::from_fd(fd)?;
     macro_rules! dispatch {
@@ -192,6 +198,15 @@ pub fn sys_setsockopt(
         RawIpv6Socket::from_fd(fd)?.set_checksum_offset(offset)?;
         return Ok(0);
     }
+    if level == PROTO_ICMPV6 && optname == ICMP6_FILTER {
+        RawIpv6Socket::from_fd(fd)?.set_icmp6_filter(optval.get_as_slice(optlen as usize)?)?;
+        return Ok(0);
+    }
+    if level == PROTO_IPV6 && is_raw_ipv6_option(optname) {
+        let value = *get::<i32>(optval, optlen)?;
+        RawIpv6Socket::from_fd(fd)?.set_ipv6_option(optname, value);
+        return Ok(0);
+    }
 
     let socket = Socket::from_fd(fd)?;
     if level == linux_raw_sys::net::SOL_SOCKET && optname == linux_raw_sys::net::SO_ATTACH_BPF {
@@ -231,4 +246,21 @@ pub fn sys_setsockopt(
     call_dispatch!(dispatch, (level, optname));
 
     Ok(0)
+}
+
+fn is_raw_ipv6_option(optname: u32) -> bool {
+    matches!(
+        optname,
+        linux_raw_sys::net::IPV6_2292PKTINFO
+            | linux_raw_sys::net::IPV6_2292HOPOPTS
+            | linux_raw_sys::net::IPV6_2292DSTOPTS
+            | linux_raw_sys::net::IPV6_2292RTHDR
+            | linux_raw_sys::net::IPV6_2292HOPLIMIT
+            | linux_raw_sys::net::IPV6_RECVPKTINFO
+            | linux_raw_sys::net::IPV6_RECVHOPLIMIT
+            | linux_raw_sys::net::IPV6_RECVRTHDR
+            | linux_raw_sys::net::IPV6_RECVHOPOPTS
+            | linux_raw_sys::net::IPV6_RECVDSTOPTS
+            | linux_raw_sys::net::IPV6_RECVTCLASS
+    )
 }

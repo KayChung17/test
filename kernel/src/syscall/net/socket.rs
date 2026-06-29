@@ -30,7 +30,7 @@ pub fn sys_socket(domain: u32, raw_ty: u32, proto: u32) -> AxResult<isize> {
         if proto == 0 {
             return Err(AxError::from(LinuxError::EPROTONOSUPPORT));
         }
-        let socket = RawIpv6Socket::new();
+        let socket = RawIpv6Socket::new(proto);
         let cloexec = raw_ty & O_CLOEXEC != 0;
         return socket.add_to_fd_table(cloexec).map(|fd| fd as isize);
     }
@@ -82,6 +82,10 @@ pub fn sys_bind(fd: i32, addr: UserConstPtr<sockaddr>, addrlen: u32) -> AxResult
         && current().as_thread().proc_data.uid() != 0
     {
         return Err(AxError::from(LinuxError::EACCES));
+    }
+
+    if RawIpv6Socket::from_fd(fd).is_ok() {
+        return Ok(0);
     }
 
     Socket::from_fd(fd)?.bind(addr)?;

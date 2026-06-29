@@ -8,6 +8,10 @@ use crate::{
     mm::{UserConstPtr, UserPtr},
 };
 
+fn cmsg_align(len: usize) -> usize {
+    (len + size_of::<usize>() - 1) & !(size_of::<usize>() - 1)
+}
+
 pub enum CMsg {
     Rights { fds: Vec<Arc<dyn FileLike>> },
 }
@@ -79,9 +83,10 @@ impl<'a> CMsgBuilder<'a> {
         let body_len = body(data)?;
 
         let cmsg_len = size_of::<cmsghdr>() + body_len;
+        let cmsg_space = cmsg_align(cmsg_len);
         hdr.cmsg_len = cmsg_len;
-        self.hdr = UserPtr::from(hdr as *const _ as usize + cmsg_len);
-        *self.len += cmsg_len;
+        self.hdr = UserPtr::from(hdr as *const _ as usize + cmsg_space);
+        *self.len += cmsg_space;
         Ok(true)
     }
 }

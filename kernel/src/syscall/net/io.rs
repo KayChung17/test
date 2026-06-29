@@ -5,7 +5,8 @@ use axerrno::{AxError, AxResult};
 use axio::prelude::*;
 use axnet::{CMsgData, RecvFlags, RecvOptions, SendFlags, SendOptions, SocketAddrEx, SocketOps};
 use linux_raw_sys::net::{
-    MSG_PEEK, MSG_TRUNC, SCM_RIGHTS, SOL_SOCKET, cmsghdr, msghdr, sockaddr, socklen_t,
+    IPPROTO_IPV6, MSG_PEEK, MSG_TRUNC, SCM_RIGHTS, SOL_SOCKET, cmsghdr, msghdr, sockaddr,
+    socklen_t,
 };
 
 use super::addr::SocketAddrExt;
@@ -61,6 +62,11 @@ pub fn sys_sendto(
 
 pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<isize> {
     let msg = msg.get_as_ref()?;
+    let mut src = IoVectorBuf::new(msg.msg_iov as *const IoVec, msg.msg_iovlen)?.into_io();
+    if let Ok(raw) = RawIpv6Socket::from_fd(fd) {
+        return raw.send_packet(&mut src).map(|sent| sent as isize);
+    }
+
     let mut cmsg = Vec::new();
     if !msg.msg_control.is_null() {
         let mut ptr = msg.msg_control as usize;
@@ -76,7 +82,7 @@ pub fn sys_sendmsg(fd: i32, msg: UserConstPtr<msghdr>, flags: u32) -> AxResult<i
     }
     send_impl(
         fd,
-        IoVectorBuf::new(msg.msg_iov as *const IoVec, msg.msg_iovlen)?.into_io(),
+        src,
         flags,
         UserConstPtr::from(msg.msg_name as usize),
         msg.msg_namelen as socklen_t,
@@ -95,7 +101,21 @@ fn recv_impl(
     debug!("sys_recv <= fd: {fd}, flags: {flags}");
 
     if let Ok(raw) = RawIpv6Socket::from_fd(fd) {
-        return raw.recv_packet(&mut dst).map(|recv| recv as isize);
+        let recv = raw.recv_packet(&mut dst)?;
+        if let Some(mut builder) = cmsg_builder {
+            for ty in raw.cmsg_types() {
+                if !builder.push(IPPROTO_IPV6 as u32, ty, |data| {
+                    let Some(out) = data.get_mut(..size_of::<u32>()) else {
+                        return Err(AxError::InvalidInput);
+                    };
+                    out.copy_from_slice(&0u32.to_ne_bytes());
+                    Ok(size_of::<u32>())
+                })? {
+                    break;
+                }
+            }
+        }
+        return Ok(recv as isize);
     }
 
     let socket = Socket::from_fd(fd)?;
