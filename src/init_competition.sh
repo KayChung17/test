@@ -62,30 +62,39 @@ EOF
 
 # ---- dynamic linker setup ----
 LIBC_LIB="$TEST_DIR/lib"
-if [ "$TEST_LIBC" = "glibc" ]; then
-    export LD_LIBRARY_PATH="$LIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    mkdir -p /lib /lib64
+GLIBC_LIB="/oscomp/glibc/lib"
+mkdir -p /lib /lib64
+
+link_glibc_runtime() {
+    [ -d "$GLIBC_LIB" ] || return 0
     for loader in \
         ld-linux-riscv64-lp64d.so.1 \
         ld-linux-loongarch-lp64d.so.1
     do
-        if [ -f "$LIBC_LIB/$loader" ]; then
-            ln -sf "$LIBC_LIB/$loader" "/lib/$loader"
-            ln -sf "$LIBC_LIB/$loader" "/lib64/$loader"
+        if [ -f "$GLIBC_LIB/$loader" ]; then
+            ln -sf "$GLIBC_LIB/$loader" "/lib/$loader"
+            ln -sf "$GLIBC_LIB/$loader" "/lib64/$loader"
         fi
     done
-    if [ -f "$LIBC_LIB/libc.so.6" ]; then
-        ln -sf "$LIBC_LIB/libc.so.6" /lib/
-        ln -sf "$LIBC_LIB/libc.so.6" /lib64/
-    fi
-    if [ -f "$LIBC_LIB/libm.so.6" ]; then
-        ln -sf "$LIBC_LIB/libm.so.6" /lib/
-        ln -sf "$LIBC_LIB/libm.so.6" /lib64/
-    fi
+    for lib in libc.so.6 libm.so.6; do
+        if [ -f "$GLIBC_LIB/$lib" ]; then
+            ln -sf "$GLIBC_LIB/$lib" "/lib/$lib"
+            ln -sf "$GLIBC_LIB/$lib" "/lib64/$lib"
+        fi
+    done
+}
+
+# Some payload directories mix libc families: for example, several musl/basic
+# binaries still request the glibc interpreter. Keep both runtimes available.
+link_glibc_runtime
+
+if [ "$TEST_LIBC" = "glibc" ]; then
+    export LD_LIBRARY_PATH="$LIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 else
-    mkdir -p /lib /lib64
+    export LD_LIBRARY_PATH="$LIBC_LIB:$GLIBC_LIB:/lib:/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     for loader in \
         ld-musl-riscv64.so.1 \
+        ld-musl-riscv64-sf.so.1 \
         ld-musl-loongarch-lp64d.so.1
     do
         if [ -f "$LIBC_LIB/$loader" ]; then
