@@ -41,7 +41,7 @@ if [ "$MODE" = dir ]; then
     for f in passwd group hostname inittab fstab inputrc; do
         [ -f "$SRC_DIR/etc/$f" ] && cp "$SRC_DIR/etc/$f" "$TMPDIR/$f"
     done
-    for f in skip_suites only_suites only_ltp_cases test_libc; do
+    for f in skip_suites only_suites only_ltp_cases skip_ltp_cases ltp_start_after_case test_libc; do
         [ -f "$SRC_DIR/etc/$f" ] && cp "$SRC_DIR/etc/$f" "$TMPDIR/$f"
     done
 else
@@ -203,14 +203,20 @@ done >> "$CMD"
 SKIP_FILE="${SKIP_SUITES_FILE:-$TMPDIR/skip_suites}"
 ONLY_FILE="${ONLY_SUITES_FILE:-$TMPDIR/only_suites}"
 ONLY_LTP_CASES_FILE="${ONLY_LTP_CASES_FILE:-$TMPDIR/only_ltp_cases}"
+SKIP_LTP_CASES_FILE="${SKIP_LTP_CASES_FILE:-$TMPDIR/skip_ltp_cases}"
+LTP_START_AFTER_CASE_FILE="${LTP_START_AFTER_CASE_FILE:-$TMPDIR/ltp_start_after_case}"
 TEST_LIBC_FILE="${TEST_LIBC_FILE:-$TMPDIR/test_libc}"
 [ -f "$SKIP_FILE" ] || SKIP_FILE=/dev/null
 [ -f "$ONLY_FILE" ] || ONLY_FILE=/dev/null
 [ -f "$ONLY_LTP_CASES_FILE" ] || ONLY_LTP_CASES_FILE=/dev/null
+[ -f "$SKIP_LTP_CASES_FILE" ] || SKIP_LTP_CASES_FILE=/dev/null
+[ -f "$LTP_START_AFTER_CASE_FILE" ] || LTP_START_AFTER_CASE_FILE=/dev/null
 [ -f "$TEST_LIBC_FILE" ] || TEST_LIBC_FILE=/dev/null
 echo "write $SKIP_FILE skip_suites" >> "$CMD"
 echo "write $ONLY_FILE only_suites" >> "$CMD"
 echo "write $ONLY_LTP_CASES_FILE only_ltp_cases" >> "$CMD"
+echo "write $SKIP_LTP_CASES_FILE skip_ltp_cases" >> "$CMD"
+echo "write $LTP_START_AFTER_CASE_FILE ltp_start_after_case" >> "$CMD"
 echo "write $TEST_LIBC_FILE test_libc" >> "$CMD"
 
 debugfs -w "$DST" < "$CMD"

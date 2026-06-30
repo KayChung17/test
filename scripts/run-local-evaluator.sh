@@ -18,6 +18,9 @@
 #   KEEP_EVAL_TMP   Keep prepared evaluator data and logs under tmp/ when set to 1
 #   ONLY_SUITES     Write /etc/only_suites into staged rootfs when non-empty
 #   SKIP_SUITES     Write /etc/skip_suites into staged rootfs when non-empty
+#   ONLY_LTP_CASES        Write /etc/only_ltp_cases when non-empty
+#   SKIP_LTP_CASES        Write /etc/skip_ltp_cases when non-empty
+#   LTP_START_AFTER_CASE  Write /etc/ltp_start_after_case when non-empty
 #   LTP_CASE_TIMEOUT       Write /etc/ltp_case_timeout when non-empty
 #   SUITE_TIMEOUT_LTP      Write /etc/suite_timeout_ltp when non-empty
 #   SUITE_TIMEOUT_DEFAULT  Write /etc/suite_timeout_default when non-empty
@@ -180,6 +183,9 @@ write_all_rootfs_control_files() {
         [ -d "$PREP_SUBMIT_DIR/$rel_path" ] || continue
         write_rootfs_control_file "$rel_path" only_suites "${ONLY_SUITES:-}"
         write_rootfs_control_file "$rel_path" skip_suites "${SKIP_SUITES:-}"
+        write_rootfs_control_file "$rel_path" only_ltp_cases "${ONLY_LTP_CASES:-}"
+        write_rootfs_control_file "$rel_path" skip_ltp_cases "${SKIP_LTP_CASES:-}"
+        write_rootfs_control_file "$rel_path" ltp_start_after_case "${LTP_START_AFTER_CASE:-}"
         write_rootfs_control_file "$rel_path" ltp_case_timeout "${LTP_CASE_TIMEOUT:-}"
         write_rootfs_control_file "$rel_path" suite_timeout_ltp "${SUITE_TIMEOUT_LTP:-}"
         write_rootfs_control_file "$rel_path" suite_timeout_default "${SUITE_TIMEOUT_DEFAULT:-}"
