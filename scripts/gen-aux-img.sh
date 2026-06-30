@@ -41,6 +41,9 @@ if [ "$MODE" = dir ]; then
     for f in passwd group hostname inittab fstab inputrc; do
         [ -f "$SRC_DIR/etc/$f" ] && cp "$SRC_DIR/etc/$f" "$TMPDIR/$f"
     done
+    for f in skip_suites only_suites only_ltp_cases test_libc; do
+        [ -f "$SRC_DIR/etc/$f" ] && cp "$SRC_DIR/etc/$f" "$TMPDIR/$f"
+    done
 else
     SRC=$(realpath "$SRC")
     echo "Extracting files from $SRC ..."
@@ -195,11 +198,16 @@ for f in hostname inittab fstab inputrc; do
     [ -f "$f" ] && echo "write $f $f"
 done >> "$CMD"
 
-# Optional: suite controls for local testing (empty by default)
-SKIP_FILE="${SKIP_SUITES_FILE:-/dev/null}"
-ONLY_FILE="${ONLY_SUITES_FILE:-/dev/null}"
-ONLY_LTP_CASES_FILE="${ONLY_LTP_CASES_FILE:-/dev/null}"
-TEST_LIBC_FILE="${TEST_LIBC_FILE:-/dev/null}"
+# Optional: suite controls for local testing. In --from-dir mode we prefer
+# the files copied from SRC_DIR/etc; callers may still override via env vars.
+SKIP_FILE="${SKIP_SUITES_FILE:-$TMPDIR/skip_suites}"
+ONLY_FILE="${ONLY_SUITES_FILE:-$TMPDIR/only_suites}"
+ONLY_LTP_CASES_FILE="${ONLY_LTP_CASES_FILE:-$TMPDIR/only_ltp_cases}"
+TEST_LIBC_FILE="${TEST_LIBC_FILE:-$TMPDIR/test_libc}"
+[ -f "$SKIP_FILE" ] || SKIP_FILE=/dev/null
+[ -f "$ONLY_FILE" ] || ONLY_FILE=/dev/null
+[ -f "$ONLY_LTP_CASES_FILE" ] || ONLY_LTP_CASES_FILE=/dev/null
+[ -f "$TEST_LIBC_FILE" ] || TEST_LIBC_FILE=/dev/null
 echo "write $SKIP_FILE skip_suites" >> "$CMD"
 echo "write $ONLY_FILE only_suites" >> "$CMD"
 echo "write $ONLY_LTP_CASES_FILE only_ltp_cases" >> "$CMD"

@@ -192,7 +192,13 @@ prepare_gz() {
     local raw_img="$1"
     local gz_path="$2"
     if [ -f "$gz_path" ] && [ -s "$gz_path" ]; then
-        return 0
+        if ! gzip -t "$gz_path" >/dev/null 2>&1; then
+            rm -f "$gz_path"
+        elif [ -n "$raw_img" ] && [ -f "$raw_img" ] && [ "$raw_img" -nt "$gz_path" ]; then
+            rm -f "$gz_path"
+        else
+            return 0
+        fi
     fi
     if [ -z "$raw_img" ] || [ ! -f "$raw_img" ]; then
         return 1
