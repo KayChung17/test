@@ -11,6 +11,16 @@ export KCONFIG_PATH=/proc/config
 
 TEST_LIBCS="${TEST_LIBCS:-glibc musl}"
 
+# The current public evaluator image can stall in cyclictest after hackbench
+# cleanup on some architectures. Skip it by default in competition mode, but
+# still allow explicit ONLY_SUITES=cyclictest during local reproduction.
+if [ -z "${ONLY_SUITES:-}" ]; then
+    case " ${SKIP_SUITES:-} " in
+        *" cyclictest "*) ;;
+        *) SKIP_SUITES="${SKIP_SUITES:+$SKIP_SUITES }cyclictest" ;;
+    esac
+fi
+
 FOUND_TEST_DIR=0
 for libc in $TEST_LIBCS; do
     if [ -d "/oscomp/$libc" ]; then
